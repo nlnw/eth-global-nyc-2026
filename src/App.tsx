@@ -1,392 +1,309 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { usePrivy, useDepositAddress } from '@privy-io/react-auth';
 import { 
   Shield, 
   Search, 
-  DollarSign, 
-  Terminal, 
-  Award, 
-  Layers, 
-  Info, 
-  Copy, 
   Activity, 
-  Key, 
-  RefreshCw, 
-  Star,
-  Users,
-  Compass,
-  Cpu
+  Copy, 
+  ExternalLink, 
+  Plus, 
+  Trash2, 
+  Wallet, 
+  Play, 
+  Users, 
+  Award,
+  TrendingUp,
+  Sparkles,
+  Check,
+  LogOut,
+  HelpCircle
 } from 'lucide-react';
 
-// API Payload interfaces
-interface Agent {
-  agent_id: number;
-  owner: string;
-  agent_uri: string;
-  avg_score: number;
-  unique_clients: number;
-  fully_onchain: boolean;
-  x402_support: boolean;
-  name: string;
-  description: string;
-  category: string;
-  avatar_url: string;
-  tee_validated: boolean;
+interface Trader {
+  address: string;
+  ens_name: string;
+  avatar: string | null;
+  total_trades: number;
+  pnl: number;
+  winrate: number;
 }
 
-interface Stats {
-  total_agents: number;
-  avg_reputation: number;
-  x402_enabled_count: number;
-  x402_percentage: number;
+interface FollowedTrader extends Trader {
+  multiplier: number;
+  active: number;
 }
 
-interface DailyReg {
-  day: string;
-  new_agents: number;
+interface CopiedTrade {
+  id: string;
+  trader_address: string;
+  trader_tx_hash: string;
+  copy_tx_hash: string;
+  token_in: string;
+  token_out: string;
+  amount_in: string;
+  amount_out: string | null;
+  timestamp: number;
 }
 
-const SQL_QUERIES = [
-  {
-    id: 'query1',
-    title: 'Adoption Curve',
-    desc: 'Measures the growth rate of new agent registrations over time since launch.',
-    code: `-- QUERY 1: Adoption Curve (Registrations per Day)
-SELECT
-  DATE(block_timestamp) AS day,
-  COUNT(*)              AS new_agents
-FROM \`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs\`
-WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432'  -- IdentityRegistry address
-  AND block_timestamp >= TIMESTAMP '2026-01-28'  -- Launch date partition pruning
-  AND topics[SAFE_OFFSET(0)] = 
-    '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a'  -- Registered event signature
-GROUP BY day
-ORDER BY day;`
-  },
-  {
-    id: 'query2',
-    title: 'ABI Decoding in SQL',
-    desc: 'Extracts agent identity and metadata pointers from raw, unparsed event logs.',
-    code: `-- QUERY 2: Decode the Registered Event (Raw ABI Decoding in SQL)
-SELECT
-  -- Extract agentId (indexed tokenId) from the second topic element
-  SAFE_CAST(topics[SAFE_OFFSET(1)] AS INT64)       AS agent_id,
+interface CopyWallet {
+  address: string;
+  walletId: string;
+  riskLimit: number;
+  balance: string;
+}
 
-  -- Extract and unpad the owner wallet address
-  CONCAT('0x', SUBSTR(topics[SAFE_OFFSET(2)], 27)) AS owner,
-
-  -- Extract and decode the dynamic agent_uri string from hex bytes
-  SAFE_CONVERT_BYTES_TO_STRING(FROM_HEX(SUBSTR(
-    data,
-    131,
-    2 * SAFE_CAST(CONCAT('0x', SUBSTR(data, 67, 64)) AS INT64)
-  )))                                              AS agent_uri
-FROM \`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs\`
-WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432' 
-  AND topics[SAFE_OFFSET(0)] = '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a'
-  AND block_timestamp >= TIMESTAMP '2026-01-28'
-ORDER BY block_timestamp DESC 
-LIMIT 50;`
-  },
-  {
-    id: 'query3',
-    title: 'Reputation Leaderboard',
-    desc: 'Aggregates ratings for each agent. Requires a threshold of unique client reviews to prevent Sybil manipulation.',
-    code: `-- QUERY 3: The Reputation Leaderboard (Aggregating Client Scores)
-WITH feedback AS (
-  SELECT
-    -- Extract agentId (indexed uint256)
-    SAFE_CAST(topics[SAFE_OFFSET(1)] AS INT64)              AS agent_id,
-
-    -- Extract and unpad client wallet address (skips leading padding zeros)
-    CONCAT('0x', SUBSTR(topics[SAFE_OFFSET(2)], 27))        AS client,
-
-    -- Extract raw rating integer from Slot 1 of data payload
-    SAFE_CAST(CONCAT('0x', SUBSTR(data,  67, 64)) AS INT64) AS raw_value,
-
-    -- Extract decimal precision scaler from Slot 2 of data payload
-    SAFE_CAST(CONCAT('0x', SUBSTR(data, 131, 64)) AS INT64) AS value_decimals
-  FROM \`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs\`
-  WHERE address = '0x8004baa17c55a88189ae136b182e5fda19de9b63'                 -- ReputationRegistry address
-    AND topics[SAFE_OFFSET(0)] = '0x6a4a61743519c9d648a14e6493f47dbe3ff1aa29e7785c96c8326a205e58febc'    -- NewFeedback event
-    AND block_timestamp >= TIMESTAMP '2026-01-28'
-    AND SUBSTR(data, 67, 1) != 'f'               -- Skip negative ratings
-)
-SELECT 
-  agent_id, 
-  COUNT(*) AS feedback_count,
-  COUNT(DISTINCT client)                             AS unique_clients, -- Sybil protection barrier
-  ROUND(AVG(raw_value / POW(10, value_decimals)), 2) AS avg_score
-FROM feedback 
-GROUP BY agent_id
-HAVING unique_clients >= 3                       -- Sybil barrier: requires reviews from at least 3 distinct wallets
-ORDER BY avg_score DESC, unique_clients DESC 
-LIMIT 20;`
-  },
-  {
-    id: 'query4',
-    title: 'The x402 JOIN Query',
-    desc: 'Joins Identity and Reputation datasets and extracts the x402Support property directly from base64-encoded on-chain payloads.',
-    code: `-- QUERY 4: Trustworthy & Payable (JOIN + Base64 Decoding)
-WITH agents AS (
-  SELECT
-    SAFE_CAST(topics[SAFE_OFFSET(1)] AS INT64)       AS agent_id,
-    CONCAT('0x', SUBSTR(topics[SAFE_OFFSET(2)], 27)) AS owner,
-    SAFE_CONVERT_BYTES_TO_STRING(FROM_HEX(SUBSTR(
-      data,
-      131,
-      2 * SAFE_CAST(CONCAT('0x', SUBSTR(data, 67, 64)) AS INT64)
-    )))                                              AS agent_uri
-  FROM \`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs\`
-  WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432' 
-    AND topics[SAFE_OFFSET(0)] = '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a'
-    AND block_timestamp >= TIMESTAMP '2026-01-28'
-),
-scores AS (
-  SELECT
-    SAFE_CAST(topics[SAFE_OFFSET(1)] AS INT64) AS agent_id,
-    COUNT(DISTINCT CONCAT('0x', SUBSTR(topics[SAFE_OFFSET(2)], 27))) AS unique_clients,
-    ROUND(AVG(
-      SAFE_CAST(CONCAT('0x', SUBSTR(data,  67, 64)) AS INT64) / 
-      POW(10, SAFE_CAST(CONCAT('0x53', SUBSTR(data, 131, 64)) AS INT64))
-    ), 2) AS avg_score
-  FROM \`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs\`
-  WHERE address = '0x8004baa17c55a88189ae136b182e5fda19de9b63'
-    AND topics[SAFE_OFFSET(0)] = '0x6a4a61743519c9d648a14e6493f47dbe3ff1aa29e7785c96c8326a205e58febc'
-    AND block_timestamp >= TIMESTAMP '2026-01-28'
-    AND SUBSTR(data, 67, 1) != 'f'
-  GROUP BY 1
-)
-SELECT 
-  a.agent_id, 
-  a.agent_uri, 
-  s.avg_score, 
-  s.unique_clients,
-  STARTS_WITH(a.agent_uri, 'data:application/json;base64,') AS fully_onchain,
-  IF(
-    STARTS_WITH(a.agent_uri, 'data:application/json;base64,'),
-    JSON_VALUE(SAFE_CONVERT_BYTES_TO_STRING(SAFE.FROM_BASE64(
-      SUBSTR(a.agent_uri, LENGTH('data:application/json;base64,') + 1)
-    )), '$.x402Support'),
-    NULL
-  ) AS x402_support
-FROM agents a 
-JOIN scores s USING (agent_id)
-ORDER BY s.avg_score DESC;`
-  }
-];
+interface BackendStatus {
+  status: string;
+  database: string;
+  privy: string;
+  agentbook: string;
+}
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'directory' | 'leaderboard' | 'console'>('dashboard');
-  const [connected, setConnected] = useState<boolean | null>(null);
-  const [isMockMode, setIsMockMode] = useState<boolean>(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { login, logout, authenticated, user, ready } = usePrivy();
+  const { createDepositAddress } = useDepositAddress();
 
-  // App Data States
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [stats, setStats] = useState<Stats>({ total_agents: 0, avg_reputation: 0, x402_enabled_count: 0, x402_percentage: 0 });
-  const [analytics, setAnalytics] = useState<DailyReg[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'trades' | 'about'>('dashboard');
+  const [status, setStatus] = useState<BackendStatus | null>(null);
+  
+  // Wallet & User states
+  const [copyWallet, setCopyWallet] = useState<CopyWallet | null>(null);
+  const [loadingWallet, setLoadingWallet] = useState(false);
+  // Lists
+  const [traders, setTraders] = useState<Trader[]>([]);
+  const [followed, setFollowed] = useState<FollowedTrader[]>([]);
+  const [trades, setTrades] = useState<CopiedTrade[]>([]);
 
-  // Search & Filter States
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterX402, setFilterX402] = useState(false);
-  const [filterTEE, setFilterTEE] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  // Forms
+  const [ensInput, setEnsInput] = useState('');
+  const [multiplierInput, setMultiplierInput] = useState(1.0);
+  const [submittingFollow, setSubmittingFollow] = useState(false);
 
-  // SQL Console States
-  const [selectedQueryId, setSelectedQueryId] = useState('query1');
-  const [copiedQuery, setCopiedQuery] = useState(false);
+  // Simulation Form
+  const [simTrader, setSimTrader] = useState('');
+  const [simAmount, setSimAmount] = useState('0.01');
+  const simTokenIn = 'ETH';
+  const simTokenOut = 'USDC';
+  const [simulating, setSimulating] = useState(false);
+  const [simSuccessHash, setSimSuccessHash] = useState<string | null>(null);
 
-  // Connection Setup Modal
-  const [showSetupModal, setShowSetupModal] = useState(false);
-  const [testingConnection, setTestingConnection] = useState(false);
-
-  const fetchStatus = async () => {
+  // Fetch status
+  const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
-      setConnected(data.connected);
-      setIsMockMode(data.using_mock || false);
-      return data.connected || data.using_mock;
+      setStatus(data);
     } catch (err) {
-      setConnected(false);
-      setIsMockMode(true);
-      return false;
+      console.error("Failed to fetch backend status:", err);
     }
-  };
-
-  const loadDashboardData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const statsRes = await fetch('/api/stats');
-      const agentsRes = await fetch('/api/agents');
-      const leadRes = await fetch('/api/leaderboard');
-      const analyticRes = await fetch('/api/analytics');
-
-      if (!statsRes.ok || !agentsRes.ok || !leadRes.ok || !analyticRes.ok) {
-        throw new Error("Failed to load BigQuery data from backend API.");
-      }
-
-      const statsData = await statsRes.json();
-      const agentsData = await agentsRes.json();
-      const leadData = await leadRes.json();
-      const analyticData = await analyticRes.json();
-
-      setStats(statsData);
-      setAgents(agentsData);
-      setLeaderboard(leadData);
-      setAnalytics(analyticData);
-    } catch (err: any) {
-      setError(err.message || "An unknown error occurred while retrieving data.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const checkAndLoad = async () => {
-    await fetchStatus();
-    await loadDashboardData();
-  };
-
-  useEffect(() => {
-    checkAndLoad();
   }, []);
 
-  const handleTestConnection = async () => {
-    setTestingConnection(true);
-    const res = await fetch('/api/status');
-    const data = await res.json();
-    setConnected(data.connected);
-    setIsMockMode(data.using_mock || false);
-
-    if (data.connected) {
-      await loadDashboardData();
-      setShowSetupModal(false);
-      alert("Successfully connected to live BigQuery Ethereum mainnet dataset!");
-    } else {
-      alert("Connection failed. Please verify that your credentials (file path or JSON string) are correctly configured in your .env file.");
+  // Fetch leaderboard traders
+  const fetchTraders = useCallback(async () => {
+    try {
+      const res = await fetch('/api/traders');
+      const data = await res.json();
+      setTraders(data);
+    } catch (err) {
+      console.error("Failed to fetch traders:", err);
     }
-    setTestingConnection(false);
+  }, []);
+
+  // Fetch followed traders for active user
+  const fetchFollowed = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/followed?userId=${encodeURIComponent(user.id)}`);
+      const data = await res.json();
+      setFollowed(data);
+      if (data.length > 0 && !simTrader) {
+        setSimTrader(data[0].address);
+      }
+    } catch (err) {
+      console.error("Failed to fetch followed traders:", err);
+    }
+  }, [user, simTrader]);
+
+  // Fetch trade history for active user
+  const fetchTrades = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/trades?userId=${encodeURIComponent(user.id)}`);
+      const data = await res.json();
+      setTrades(data);
+    } catch (err) {
+      console.error("Failed to fetch trade history:", err);
+    }
+  }, [user]);
+
+  // Fetch copy wallet info (including balance)
+  const fetchWallet = useCallback(async () => {
+    if (!user) return;
+    setLoadingWallet(true);
+    try {
+      const res = await fetch('/api/get-wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id })
+      });
+      const data = await res.json();
+      setCopyWallet(data);
+    } catch (err) {
+      console.error("Failed to fetch copy-trading wallet:", err);
+    } finally {
+      setLoadingWallet(false);
+    }
+  }, [user]);
+
+  // Handle follow submission
+  const handleFollow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !ensInput) return;
+    
+    setSubmittingFollow(true);
+    try {
+      const res = await fetch('/api/follow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          ensName: ensInput,
+          multiplier: multiplierInput
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Follow failed");
+      } else {
+        setEnsInput('');
+        setMultiplierInput(1.0);
+        await fetchFollowed();
+        await fetchTraders();
+      }
+    } catch (err) {
+      console.error("Follow error:", err);
+    } finally {
+      setSubmittingFollow(false);
+    }
   };
 
-  // Helper to copy SQL query to clipboard
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedQuery(true);
-    setTimeout(() => setCopiedQuery(false), 2000);
+  // Handle unfollow
+  const handleUnfollow = async (traderAddress: string) => {
+    if (!user) return;
+    if (!confirm("Are you sure you want to stop copy-trading this address?")) return;
+
+    try {
+      const res = await fetch('/api/unfollow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          traderAddress
+        })
+      });
+      if (res.ok) {
+        await fetchFollowed();
+        await fetchTraders();
+      }
+    } catch (err) {
+      console.error("Unfollow error:", err);
+    }
   };
 
-  // Filters logic
-  const filteredAgents = agents.filter(agent => {
-    const matchesSearch = 
-      agent.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      agent.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      agent.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      String(agent.agent_id).includes(searchQuery);
+  // Fund copy wallet via Privy universal deposit address
+  const handleFundWallet = async () => {
+    if (!copyWallet) return;
+    try {
+      await createDepositAddress({
+        destinationChain: 'eip155:84532', // Base Sepolia
+        destinationAddress: copyWallet.address,
+        destinationCurrency: '0x0000000000000000000000000000000000000000'
+      });
+      // Refresh wallet after modal closes
+      setTimeout(fetchWallet, 4000);
+    } catch (err) {
+      console.error("Deposit flow failed:", err);
+    }
+  };
 
-    const matchesX402 = !filterX402 || agent.x402_support;
-    const matchesTEE = !filterTEE || agent.tee_validated;
-    const matchesCategory = selectedCategory === 'all' || agent.category.toLowerCase() === selectedCategory.toLowerCase();
+  // Simulate swap execution
+  const handleSimulateSwap = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!simTrader) {
+      alert("Please select or follow a trader first!");
+      return;
+    }
 
-    return matchesSearch && matchesX402 && matchesTEE && matchesCategory;
-  });
+    setSimulating(true);
+    setSimSuccessHash(null);
+    try {
+      const res = await fetch('/api/simulate-swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          traderAddress: simTrader,
+          tokenIn: simTokenIn,
+          tokenOut: simTokenOut,
+          amountIn: simAmount,
+          amountOut: (Number(simAmount) * 3200).toString() // Mock swap price
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSimSuccessHash(data.simulatedTxHash);
+        // Refresh trades and wallet balance
+        setTimeout(() => {
+          fetchTrades();
+          fetchWallet();
+        }, 1500);
+      } else {
+        alert(data.error || "Simulation failed");
+      }
+    } catch (err) {
+      console.error("Simulation error:", err);
+    } finally {
+      setSimulating(false);
+    }
+  };
 
-  // Calculate categories count for bar charts
-  const categoryCounts = agents.reduce((acc: { [key: string]: number }, agent) => {
-    const cat = agent.category || 'AI General';
-    acc[cat] = (acc[cat] || 0) + 1;
-    return acc;
-  }, {});
+  // Bootstrap data loading
+  useEffect(() => {
+    fetchStatus();
+    fetchTraders();
+  }, [fetchStatus, fetchTraders]);
 
-  // Draw custom SVG Area Chart for registrations
-  const renderSvgChart = () => {
-    if (analytics.length === 0) return null;
-    const maxVal = Math.max(...analytics.map(d => d.new_agents), 4);
-    const width = 600;
-    const height = 180;
-    const paddingLeft = 30;
-    const paddingRight = 10;
-    const paddingTop = 20;
-    const paddingBottom = 25;
+  // Load user-specific data
+  useEffect(() => {
+    if (authenticated && user) {
+      fetchWallet();
+      fetchFollowed();
+      fetchTrades();
+      
+      // Periodic updates for trades/wallet balance
+      const interval = setInterval(() => {
+        fetchWallet();
+        fetchTrades();
+      }, 10000);
+      
+      return () => clearInterval(interval);
+    } else {
+      setCopyWallet(null);
+      setFollowed([]);
+      setTrades([]);
+    }
+  }, [authenticated, user, fetchWallet, fetchFollowed, fetchTrades]);
 
-    const chartWidth = width - paddingLeft - paddingRight;
-    const chartHeight = height - paddingTop - paddingBottom;
+  // Helper to format addresses
+  const shortenAddress = (address: string) => {
+    if (!address) return '';
+    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+  };
 
-    const points = analytics.map((d, index) => {
-      const x = paddingLeft + (index / (analytics.length - 1)) * chartWidth;
-      const y = paddingTop + chartHeight - (d.new_agents / maxVal) * chartHeight;
-      return { x, y, ...d };
-    });
-
-    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
-
+  if (!ready) {
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
-        <defs>
-          <linearGradient id="chartGlow" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0.0" />
-          </linearGradient>
-        </defs>
-
-        {/* Grid Lines */}
-        {[0, 0.25, 0.5, 0.75, 1].map((r, i) => {
-          const y = paddingTop + chartHeight * r;
-          const gridVal = Math.round(maxVal * (1 - r));
-          return (
-            <g key={i}>
-              <line x1={paddingLeft} y1={y} x2={width - paddingRight} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-              <text x={paddingLeft - 8} y={y + 4} fill="#64748b" fontSize="9" textAnchor="end" fontFamily="monospace">{gridVal}</text>
-            </g>
-          );
-        })}
-
-        {/* Chart Paths */}
-        <path d={areaPath} fill="url(#chartGlow)" />
-        <path d={linePath} fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" />
-
-        {/* Highlight points */}
-        {points.map((p, i) => (
-          <circle 
-            key={i} 
-            cx={p.x} 
-            cy={p.y} 
-            r="3" 
-            fill="#a78bfa" 
-            stroke="#0b0813" 
-            strokeWidth="1.5"
-            className="cursor-pointer hover:r-5 transition-all"
-          >
-            <title>{p.day}: {p.new_agents}</title>
-          </circle>
-        ))}
-
-        {/* X Axis labels */}
-        {points.filter((_, i) => i % Math.max(1, Math.floor(points.length / 5)) === 0).map((p, i) => (
-          <text 
-            key={i} 
-            x={p.x} 
-            y={height - 8} 
-            fill="#64748b" 
-            fontSize="9" 
-            textAnchor="middle"
-          >
-            {p.day.substring(5)}
-          </text>
-        ))}
-      </svg>
-    );
-  };
-
-  // If loading status
-  if (connected === null) {
-    return (
-      <div className="loading-container">
-        <div className="spinner"></div>
-        <div className="loading-text">Initializing Trust402 Explorer...</div>
+      <div className="loading-container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#06040a' }}>
+        <div className="spinner" style={{ border: '3px solid rgba(139, 92, 246, 0.1)', borderTop: '3px solid #8b5cf6', borderRadius: '50%', width: '40px', height: '40px', animation: 'spin 1s linear infinite' }}></div>
+        <div style={{ marginTop: '1.5rem', color: '#9ca3af', fontFamily: 'Outfit', fontWeight: 500 }}>Initializing Vouch Engine...</div>
       </div>
     );
   }
@@ -398,10 +315,10 @@ export default function App() {
         <div className="header-container">
           <div className="logo-section">
             <div className="logo-icon">
-              <Cpu size={22} />
+              <TrendingUp size={22} />
             </div>
-            <span className="logo-text">Trust402</span>
-            <span className="logo-badge">ERC-8004</span>
+            <span className="logo-text">Vouch</span>
+            <span className="logo-badge">Copy-Trading</span>
           </div>
 
           <nav>
@@ -413,557 +330,501 @@ export default function App() {
               Dashboard
             </button>
             <button 
-              className={`nav-tab ${activeTab === 'directory' ? 'active' : ''}`}
-              onClick={() => setActiveTab('directory')}
+              className={`nav-tab ${activeTab === 'trades' ? 'active' : ''}`}
+              onClick={() => setActiveTab('trades')}
             >
-              <Compass size={16} />
-              Directory
+              <Copy size={16} />
+              Trades History
             </button>
             <button 
-              className={`nav-tab ${activeTab === 'leaderboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('leaderboard')}
+              className={`nav-tab ${activeTab === 'about' ? 'active' : ''}`}
+              onClick={() => setActiveTab('about')}
             >
-              <Award size={16} />
-              Leaderboard
-            </button>
-            <button 
-              className={`nav-tab ${activeTab === 'console' ? 'active' : ''}`}
-              onClick={() => setActiveTab('console')}
-            >
-              <Terminal size={16} />
-              SQL Sandbox
+              <HelpCircle size={16} />
+              AgentBook Setup
             </button>
           </nav>
 
-          <div 
-            className="connection-status cursor-pointer hover:bg-white/5 transition-all"
-            onClick={() => setShowSetupModal(true)}
-            title="Configure Google Cloud BigQuery settings"
-          >
-            <div className={`status-indicator ${connected ? 'connected' : 'disconnected'}`}></div>
-            <span>{connected ? "BigQuery Online" : "Demo Mode (Mock)"}</span>
+          <div className="flex items-center gap-3">
+            {status && (
+              <div className="connection-status">
+                <div className={`status-indicator ${status.status === 'online' ? 'connected' : 'disconnected'}`}></div>
+                <span>{status.privy === 'configured' ? 'Mainnet RPC' : 'Local Failsafe'}</span>
+              </div>
+            )}
+
+            {authenticated ? (
+              <button onClick={logout} className="filter-btn hover:text-red-400 border border-red-900/30 bg-red-950/10">
+                <LogOut size={14} />
+                Disconnect
+              </button>
+            ) : (
+              <button onClick={login} className="code-btn" style={{ padding: '0.5rem 1.2rem', borderRadius: '8px' }}>
+                <Wallet size={14} />
+                Connect Wallet
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* Main Container */}
       <main className="container">
-        {isMockMode && (
-          <div className="glass-panel p-4 mb-6 flex justify-between items-center bg-purple-950/20 border-purple-900/30 fade-in">
-            <div className="flex items-center gap-3">
-              <Info size={18} className="text-pink-400 flex-shrink-0" />
-              <span className="text-sm text-gray-200">
-                <strong>Demo Mode:</strong> Running with simulated Ethereum log data. Click the setup button to connect your live Google BigQuery datasets.
-              </span>
+        
+        {/* Onboarding / Unauthenticated Landing Page */}
+        {!authenticated && (
+          <div className="glass-panel text-center max-w-2xl mx-auto my-12 p-12 fade-in" style={{ borderColor: 'rgba(139, 92, 246, 0.2)', boxShadow: '0 20px 50px rgba(139, 92, 246, 0.05)' }}>
+            <div className="mx-auto bg-gradient-to-tr from-purple-600 to-pink-600 w-16 h-16 rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg shadow-purple-500/20">
+              <Sparkles size={28} />
             </div>
-            <button 
-              onClick={() => setShowSetupModal(true)} 
-              className="code-btn"
-              style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem' }}
-            >
-              <Key size={12} />
-              Setup Live BigQuery
+            <h1 className="text-4xl font-extrabold mb-4 tracking-tight" style={{ fontFamily: 'Outfit' }}>
+              Autonomous On-Chain Copy Trading
+            </h1>
+            <p className="text-gray-400 text-md leading-relaxed mb-8 max-w-lg mx-auto">
+              Follow top Ethereum traders by ENS name. Fund your secure Privy wallet, and our proof-of-human-gated AI agents will mirror their swaps on Base Sepolia instantly.
+            </p>
+            
+            <div className="grid grid-cols-3 gap-4 mb-8 text-left max-w-md mx-auto">
+              <div className="p-3 rounded-xl bg-white/5 border border-white/5">
+                <div className="text-purple-400 font-bold mb-1">01. Discovery</div>
+                <div className="text-xs text-gray-500">Track traders easily using their .eth domain identity.</div>
+              </div>
+              <div className="p-3 rounded-xl bg-white/5 border border-white/5">
+                <div className="text-purple-400 font-bold mb-1">02. Funding</div>
+                <div className="text-xs text-gray-500">Universal deposit addresses let you fund from any wallet/chain.</div>
+              </div>
+              <div className="p-3 rounded-xl bg-white/5 border border-white/5">
+                <div className="text-purple-400 font-bold mb-1">03. World ID</div>
+                <div className="text-xs text-gray-500">World AgentKit gates copy execution for fair trial limits.</div>
+              </div>
+            </div>
+
+            <button onClick={login} className="code-btn shadow-lg shadow-purple-500/10" style={{ padding: '0.8rem 2.2rem', fontSize: '1rem', borderRadius: '12px' }}>
+              <Wallet size={16} />
+              Connect Privy Embedded Wallet
             </button>
           </div>
         )}
 
-        {loading ? (
-          <div className="loading-container">
-            <div className="spinner"></div>
-            <div className="loading-text">Executing BigQuery Ethereum Pipeline...</div>
-          </div>
-        ) : error ? (
-          <div className="glass-panel p-8 text-center max-w-xl mx-auto my-8 fade-in">
-            <div className="text-red-500 text-3xl mb-4">⚠️</div>
-            <h3 className="text-xl font-bold mb-2">BigQuery Query Failed</h3>
-            <p className="text-gray-400 mb-6 text-sm">{error}</p>
-            <button onClick={loadDashboardData} className="retry-btn">
-              Retry Queries
-            </button>
-          </div>
-        ) : (
+        {/* Authenticated Dashboard */}
+        {authenticated && (
           <div className="fade-in">
             
-            {/* TAB: DASHBOARD */}
-            {activeTab === 'dashboard' && (
-              <>
-                <div className="stats-grid">
-                  <div className="glass-panel stat-card">
-                    <div className="stat-header">
-                      <span>Total Registered Agents</span>
-                      <Users size={16} className="text-purple-400" />
-                    </div>
-                    <div className="stat-value">{stats.total_agents}</div>
-                    <div className="stat-footer">
-                      <span>Identity registry: 0x8004a1...</span>
-                    </div>
-                  </div>
-
-                  <div className="glass-panel stat-card accent">
-                    <div className="stat-header">
-                      <span>Average Reputation Score</span>
-                      <Star size={16} className="text-pink-400" fill="currentColor" />
-                    </div>
-                    <div className="stat-value">{(stats.avg_reputation / 20).toFixed(1)} / 5.0</div>
-                    <div className="stat-footer">
-                      <span>Derived from feedback ({stats.avg_reputation.toFixed(1)}%)</span>
-                    </div>
-                  </div>
-
-                  <div className="glass-panel stat-card success">
-                    <div className="stat-header">
-                      <span>x402 Micropayments Enabled</span>
-                      <DollarSign size={16} className="text-emerald-400" />
-                    </div>
-                    <div className="stat-value">{stats.x402_enabled_count}</div>
-                    <div className="stat-footer">
-                      <span>{stats.x402_percentage.toFixed(1)}% of registered fleet</span>
-                    </div>
-                  </div>
-
-                  <div className="glass-panel stat-card warning">
-                    <div className="stat-header">
-                      <span>TEE-Secured Validations</span>
-                      <Shield size={16} className="text-amber-400" />
-                    </div>
-                    <div className="stat-value">
-                      {agents.filter(a => a.tee_validated).length}
-                    </div>
-                    <div className="stat-footer">
-                      <span>Verified via ValidationRegistry</span>
-                    </div>
-                  </div>
+            {/* User Stats Banner */}
+            <div className="stats-grid">
+              <div className="glass-panel stat-card">
+                <div className="stat-header">
+                  <span>Copy-Trading Address</span>
+                  <Wallet size={15} className="text-purple-400" />
                 </div>
-
-                <div className="charts-grid">
-                  <div className="glass-panel chart-card">
-                    <h3 className="chart-title">
-                      <Activity size={18} className="text-purple-400" />
-                      Agent Registrations Adoption Curve
-                    </h3>
-                    <div className="svg-chart-container">
-                      {renderSvgChart()}
-                    </div>
-                  </div>
-
-                  <div className="glass-panel chart-card">
-                    <h3 className="chart-title">
-                      <Layers size={18} className="text-pink-400" />
-                      Fleet Categories Distribution
-                    </h3>
-                    <div className="category-bars mt-4">
-                      {Object.keys(categoryCounts).length === 0 ? (
-                        <div className="text-center text-sm text-gray-500 py-12">No categorized agents</div>
-                      ) : (
-                        Object.entries(categoryCounts).map(([cat, val]) => {
-                          const pct = (val / stats.total_agents) * 100;
-                          return (
-                            <div className="category-bar-item" key={cat}>
-                              <div className="category-label">
-                                <span>{cat}</span>
-                                <span className="text-gray-400 font-mono">{val} ({pct.toFixed(0)}%)</span>
-                              </div>
-                              <div className="category-bar-bg">
-                                <div className="category-bar-fill" style={{ width: `${pct}%` }}></div>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="glass-panel p-6 mb-4 flex items-start gap-4">
-                  <Info size={24} className="text-purple-400 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="font-bold mb-1">About the ERC-8004 &amp; x402 Trust Layer</h4>
-                    <p className="text-sm text-gray-400 leading-relaxed">
-                      ERC-8004 is a standard that creates a trust, identity, and reputation layer for autonomous AI agents on EVM blockchains. 
-                      By combining ERC-8004 on-chain reputation scores with x402 payment support metadata, applications can query Google BigQuery 
-                      to dynamically discover trustworthy, verified agents and invoke them utilizing zero-friction micro-payments.
-                    </p>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* TAB: DIRECTORY */}
-            {activeTab === 'directory' && (
-              <>
-                <div className="glass-panel filter-panel">
-                  <div className="search-wrapper">
-                    <Search size={18} className="search-icon" />
-                    <input 
-                      type="text" 
-                      placeholder="Search agents by ID, name, owner, or category..." 
-                      className="search-input"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="filter-group">
-                    <button 
-                      className={`filter-btn ${filterX402 ? 'active' : ''}`}
-                      onClick={() => setFilterX402(!filterX402)}
-                    >
-                      <DollarSign size={15} />
-                      x402 Support
-                    </button>
-                    <button 
-                      className={`filter-btn ${filterTEE ? 'active' : ''}`}
-                      onClick={() => setFilterTEE(!filterTEE)}
-                    >
-                      <Shield size={15} />
-                      TEE Validated
-                    </button>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <select
-                      className="filter-btn active"
-                      style={{ background: 'rgba(18, 12, 38, 0.8)', border: '1px solid var(--panel-border)', outline: 'none' }}
-                      value={selectedCategory}
-                      onChange={(e) => setSelectedCategory(e.target.value)}
-                    >
-                      <option value="all">All Categories</option>
-                      {Object.keys(categoryCounts).map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {filteredAgents.length === 0 ? (
-                  <div className="glass-panel p-16 text-center text-gray-500">
-                    No agents match your current query filters.
-                  </div>
+                {loadingWallet && !copyWallet ? (
+                  <div className="stat-value text-lg text-gray-500">Deploying Wallet...</div>
                 ) : (
-                  <div className="agents-grid">
-                    {filteredAgents.map(agent => (
-                      <div className={`glass-panel agent-card ${agent.x402_support ? 'payable' : ''}`} key={agent.agent_id}>
+                  <>
+                    <div 
+                      className="stat-value text-xl font-mono cursor-pointer hover:text-purple-300"
+                      onClick={() => {
+                        if (copyWallet) {
+                          navigator.clipboard.writeText(copyWallet.address);
+                          alert("Wallet address copied to clipboard!");
+                        }
+                      }}
+                      title="Copy Wallet Address"
+                    >
+                      {copyWallet ? shortenAddress(copyWallet.address) : '...'}
+                    </div>
+                    <div className="stat-footer mt-2">
+                      <span className="text-purple-400 font-semibold font-mono">{copyWallet?.walletId.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="glass-panel stat-card accent">
+                <div className="stat-header">
+                  <span>Wallet Balance (Base Sepolia)</span>
+                  <Activity size={15} className="text-pink-400" />
+                </div>
+                <div className="stat-value text-2xl font-mono">
+                  {copyWallet ? `${Number(copyWallet.balance).toFixed(5)} ETH` : '0.00 ETH'}
+                </div>
+                <div className="stat-footer mt-2 flex gap-2">
+                  <button onClick={handleFundWallet} className="code-btn" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', borderRadius: '6px' }}>
+                    Universal Deposit
+                  </button>
+                  <a href="https://faucets.chain.link/base-sepolia" target="_blank" rel="noopener noreferrer" className="filter-btn" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', borderRadius: '6px' }}>
+                    Get Faucet ETH
+                  </a>
+                </div>
+              </div>
+
+              <div className="glass-panel stat-card success">
+                <div className="stat-header">
+                  <span>World ID AgentKit Status</span>
+                  <Shield size={15} className="text-emerald-400" />
+                </div>
+                <div className="stat-value text-2xl flex items-center gap-2">
+                  <Check size={22} className="text-emerald-400" />
+                  <span className="text-lg text-gray-200">Human Proof Verified</span>
+                </div>
+                <div className="stat-footer mt-2">
+                  <span className="text-emerald-400 font-medium">First 3 copy-trades free per human ID</span>
+                </div>
+              </div>
+            </div>
+
+            {/* TAB CONTENT: DASHBOARD */}
+            {activeTab === 'dashboard' && (
+              <div className="charts-grid">
+                
+                {/* Left Column: Follow & Leaderboard */}
+                <div className="flex flex-col gap-6">
+                  
+                  {/* Follow ENS Form */}
+                  <div className="glass-panel p-6">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                      <Plus size={18} className="text-purple-400" />
+                      Follow a Trader by ENS
+                    </h3>
+                    <form onSubmit={handleFollow} className="flex gap-3">
+                      <div className="relative flex-1">
+                        <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500" />
+                        <input 
+                          type="text" 
+                          placeholder="e.g. vitalik.eth" 
+                          className="search-input"
+                          style={{ paddingLeft: '2.5rem' }}
+                          value={ensInput}
+                          onChange={(e) => setEnsInput(e.target.value)}
+                          disabled={submittingFollow}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 bg-black/40 border border-white/5 px-3 rounded-xl">
+                        <span className="text-xs text-gray-500">Size:</span>
+                        <input 
+                          type="number" 
+                          step="0.1" 
+                          min="0.1" 
+                          max="10" 
+                          className="w-12 bg-transparent text-white border-none outline-none font-mono"
+                          value={multiplierInput}
+                          onChange={(e) => setMultiplierInput(Number(e.target.value))}
+                          disabled={submittingFollow}
+                        />
+                        <span className="text-xs text-gray-500">x</span>
+                      </div>
+                      <button type="submit" className="code-btn" style={{ padding: '0.65rem 1.5rem', borderRadius: '12px' }} disabled={submittingFollow}>
+                        {submittingFollow ? 'Resolving...' : 'Follow'}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Leaderboard */}
+                  <div className="glass-panel p-6">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                      <Award size={18} className="text-yellow-400" />
+                      Global Trader Leaderboard
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="leaderboard-table w-full">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-500 border-b border-white/5">
+                            <th className="pb-3">Trader</th>
+                            <th className="pb-3">Address</th>
+                            <th className="pb-3">Total Swaps</th>
+                            <th className="pb-3">Simulated PnL</th>
+                            <th className="pb-3">Win Rate</th>
+                            <th className="pb-3 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {traders.map((trader) => {
+                            const isFollowed = followed.some(f => f.address === trader.address);
+                            return (
+                              <tr key={trader.address} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                <td className="py-4 flex items-center gap-2">
+                                  <img 
+                                    src={trader.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${trader.ens_name}`}
+                                    alt={trader.ens_name} 
+                                    className="w-6 h-6 rounded-full"
+                                  />
+                                  <span className="font-bold text-sm text-gray-200">{trader.ens_name}</span>
+                                </td>
+                                <td className="py-4 font-mono text-xs text-gray-400">{shortenAddress(trader.address)}</td>
+                                <td className="py-4 text-sm font-mono text-gray-300">{trader.total_trades}</td>
+                                <td className={`py-4 text-sm font-mono font-bold ${trader.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                  {trader.pnl >= 0 ? `+${trader.pnl}%` : `${trader.pnl}%`}
+                                </td>
+                                <td className="py-4 text-sm font-mono text-gray-300">{trader.winrate}%</td>
+                                <td className="py-4 text-right">
+                                  {isFollowed ? (
+                                    <span className="text-xs text-emerald-400 font-semibold bg-emerald-950/20 border border-emerald-900/30 px-2 py-1 rounded-md">Following</span>
+                                  ) : (
+                                    <button 
+                                      onClick={() => {
+                                        setEnsInput(trader.ens_name);
+                                      }}
+                                      className="code-btn"
+                                      style={{ padding: '0.3rem 0.75rem', fontSize: '0.75rem', borderRadius: '6px' }}
+                                    >
+                                      Follow
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Column: Followed list & Simulation Tools */}
+                <div className="flex flex-col gap-6">
+                  
+                  {/* Currently Followed */}
+                  <div className="glass-panel p-6">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                      <Users size={18} className="text-purple-400" />
+                      Traders You Follow ({followed.length})
+                    </h3>
+                    {followed.length === 0 ? (
+                      <div className="text-center text-sm text-gray-500 py-12">
+                        You are not copy-trading any traders yet. Follow one using their ENS name above!
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        {followed.map((f) => (
+                          <div key={f.address} className="flex justify-between items-center bg-black/30 border border-white/5 p-4 rounded-xl">
+                            <div className="flex items-center gap-3">
+                              <img 
+                                src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ens_name}`}
+                                alt={f.ens_name} 
+                                className="w-8 h-8 rounded-full"
+                              />
+                              <div>
+                                <span className="font-bold text-gray-200 block text-sm">{f.ens_name}</span>
+                                <span className="text-xs text-gray-500 font-mono">{shortenAddress(f.address)}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <div className="text-right">
+                                <span className="text-xs text-gray-500 block">Copy Size</span>
+                                <span className="text-sm font-mono font-bold text-purple-400">{f.multiplier}x</span>
+                              </div>
+                              <button 
+                                onClick={() => handleUnfollow(f.address)} 
+                                className="text-gray-500 hover:text-red-400 p-1 transition-colors"
+                                title="Unfollow trader"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dev Simulation Tools */}
+                  <div className="glass-panel p-6 bg-purple-950/5 border-purple-900/20">
+                    <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+                      <Play size={18} className="text-pink-400 animate-pulse" />
+                      Trade Simulator (Demo helper)
+                    </h3>
+                    <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                      Mainnet traders might not swap while you are evaluating this app. Use this injector to force a swap from `vitalik.eth` or another followed address, which triggers the detection loop, passes it through the World ID AgentKit gate, and replicates the swap on Base Sepolia.
+                    </p>
+
+                    <form onSubmit={handleSimulateSwap} className="flex flex-col gap-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">Select followed trader to swap</label>
+                        <select 
+                          className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-gray-300 outline-none"
+                          value={simTrader}
+                          onChange={(e) => setSimTrader(e.target.value)}
+                        >
+                          <option value="">-- Select followed trader --</option>
+                          {followed.map(f => (
+                            <option key={f.address} value={f.address}>{f.ens_name} ({shortenAddress(f.address)})</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
                         <div>
-                          <div className="agent-card-header">
-                            <img 
-                              src={agent.avatar_url || `https://api.dicebear.com/7.x/identicon/svg?seed=agent-${agent.agent_id}`}
-                              alt={agent.name} 
-                              className="agent-avatar"
-                            />
-                            <div className="agent-title-info">
-                              <span className="agent-id-tag">AGENT #{agent.agent_id}</span>
-                              <h3 className="agent-name">{agent.name}</h3>
-                              <span className="agent-category-badge">{agent.category}</span>
-                            </div>
-                          </div>
-
-                          <p className="agent-desc">{agent.description}</p>
-
-                          <div className="agent-stats">
-                            <div className="agent-stat-item">
-                              <span className="agent-stat-label">Reputation</span>
-                              <span className="agent-stat-value">
-                                {agent.avg_score > 0 ? (
-                                  <>
-                                    <Star size={14} className="text-yellow-400" fill="currentColor" />
-                                    <span>{(agent.avg_score / 20).toFixed(1)}</span>
-                                    <span className="text-xs text-gray-400 font-normal">({agent.unique_clients} client{agent.unique_clients > 1 ? 's' : ''})</span>
-                                  </>
-                                ) : (
-                                  <span className="text-gray-500 text-sm font-normal">No Reviews</span>
-                                )}
-                              </span>
-                            </div>
-                            <div className="agent-stat-item">
-                              <span className="agent-stat-label">Onchain Sync</span>
-                              <span className="agent-stat-value text-xs font-mono text-purple-400">
-                                {agent.fully_onchain ? "100% onchain metadata" : "URI metadata resolved"}
-                              </span>
-                            </div>
-                          </div>
+                          <label className="text-xs text-gray-500 block mb-1">Amount In</label>
+                          <input 
+                            type="text" 
+                            className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-center text-gray-300 outline-none font-mono"
+                            value={simAmount}
+                            onChange={(e) => setSimAmount(e.target.value)}
+                          />
                         </div>
-
-                        <div className="agent-card-footer">
-                          <div 
-                            className="address-pill"
-                            onClick={() => {
-                              navigator.clipboard.writeText(agent.owner);
-                              alert("Owner address copied to clipboard!");
-                            }}
-                          >
-                            <span>{agent.owner.substring(0, 6)}...{agent.owner.substring(agent.owner.length - 4)}</span>
-                            <Copy size={12} />
-                          </div>
-
-                          <div className="flex gap-2">
-                            {agent.tee_validated && (
-                              <span className="badge success" title="TEE Validated cryptography">
-                                <Shield size={12} />
-                                TEE
-                              </span>
-                            )}
-                            {agent.x402_support ? (
-                              <span className="badge success">
-                                <DollarSign size={12} />
-                                x402
-                              </span>
-                            ) : (
-                              <span className="badge muted">
-                                Free/No payment metadata
-                              </span>
-                            )}
-                          </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1">Token In</label>
+                          <input 
+                            type="text" 
+                            className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-center text-gray-300 outline-none font-mono"
+                            value={simTokenIn}
+                            disabled
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1">Token Out</label>
+                          <input 
+                            type="text" 
+                            className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-center text-gray-300 outline-none font-mono"
+                            value={simTokenOut}
+                            disabled
+                          />
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
 
-            {/* TAB: LEADERBOARD */}
-            {activeTab === 'leaderboard' && (
-              <div className="glass-panel leaderboard-container">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h3 className="text-xl font-bold flex items-center gap-2">
-                      <Award className="text-yellow-400" />
-                      On-Chain Reputation Leaderboard
-                    </h3>
-                    <p className="text-sm text-gray-400 mt-1">
-                      Aggregates client feedback ratings. Implements Sybil protection by excluding agents with &lt; 3 unique clients.
-                    </p>
-                  </div>
-                </div>
+                      <button type="submit" className="code-btn" style={{ padding: '0.6rem', width: '100%', borderRadius: '10px' }} disabled={simulating}>
+                        {simulating ? 'Processing Copy...' : 'Simulate Swap on Mainnet'}
+                      </button>
 
-                <div className="leaderboard-table-wrapper">
-                  <table className="leaderboard-table">
-                    <thead>
-                      <tr>
-                        <th className="rank-cell">Rank</th>
-                        <th>Agent</th>
-                        <th>Avg Rating</th>
-                        <th>Total Reviews</th>
-                        <th>Unique Clients</th>
-                        <th>x402 Payments</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {leaderboard.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} className="text-center text-gray-500 py-12">
-                            No agents have met the Sybil barrier threshold (minimum 3 unique client reviews).
-                          </td>
-                        </tr>
-                      ) : (
-                        leaderboard.map((item, index) => (
-                          <tr key={item.agent_id}>
-                            <td className={`rank-cell top-${index + 1}`}>
-                              {index + 1}
-                            </td>
-                            <td>
-                              <div className="agent-cell">
-                                <div className="logo-icon" style={{ width: '30px', height: '30px', borderRadius: '6px' }}>
-                                  <Cpu size={14} />
-                                </div>
-                                <div>
-                                  <span className="font-bold block">{item.name}</span>
-                                  <span className="text-xs text-gray-400 font-mono">Agent ID: #{item.agent_id}</span>
-                                </div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="flex items-center gap-1">
-                                <Star size={14} className="text-yellow-400" fill="currentColor" />
-                                <span className="font-bold font-mono">{(item.avg_score / 20).toFixed(1)}</span>
-                                <span className="text-xs text-gray-400">/ 5.0</span>
-                              </div>
-                            </td>
-                            <td className="font-mono">{item.feedback_count}</td>
-                            <td className="font-mono">{item.unique_clients}</td>
-                            <td>
-                              {item.x402_support ? (
-                                <span className="badge success w-fit">
-                                  <DollarSign size={12} />
-                                  x402 Enabled
-                                </span>
-                              ) : (
-                                <span className="badge muted w-fit">No Pay Meta</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
+                      {simSuccessHash && (
+                        <div className="mt-3 p-3 rounded-xl bg-emerald-950/20 border border-emerald-900/30 text-xs text-emerald-400 flex flex-col gap-1">
+                          <span className="font-bold flex items-center gap-1">
+                            <Check size={14} />
+                            Simulation Triggered!
+                          </span>
+                          <span>Copy execution succeeded on Base Sepolia. Check the Trades History tab to view the transaction!</span>
+                        </div>
                       )}
-                    </tbody>
-                  </table>
+                    </form>
+                  </div>
+
                 </div>
+
               </div>
             )}
 
-            {/* TAB: SQL PLAYGROUND */}
-            {activeTab === 'console' && (
-              <div className="console-layout">
-                <div className="console-sidebar">
-                  {SQL_QUERIES.map(q => (
-                    <button
-                      key={q.id}
-                      className={`query-selector-btn ${selectedQueryId === q.id ? 'active' : ''}`}
-                      onClick={() => setSelectedQueryId(q.id)}
-                    >
-                      <span className="query-selector-title">{q.title}</span>
-                      <span className="query-selector-desc">{q.desc}</span>
-                    </button>
-                  ))}
-                </div>
+            {/* TAB CONTENT: TRADES HISTORY */}
+            {activeTab === 'trades' && (
+              <div className="glass-panel p-6">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  <Activity size={18} className="text-purple-400" />
+                  Copied Trades History
+                </h3>
+                {trades.length === 0 ? (
+                  <div className="text-center text-sm text-gray-500 py-16">
+                    No copied trades yet. Simulate a trader swap or follow an active trader to see trades replicated here.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="leaderboard-table w-full">
+                      <thead>
+                        <tr className="text-left text-xs text-gray-500 border-b border-white/5">
+                          <th className="pb-3">Trader</th>
+                          <th className="pb-3">Action</th>
+                          <th className="pb-3">Base Sepolia Tx</th>
+                          <th className="pb-3">Original Mainnet Tx</th>
+                          <th className="pb-3">Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {trades.map((trade) => {
+                          const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ens_name || shortenAddress(trade.trader_address);
+                          return (
+                            <tr key={trade.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                              <td className="py-4 font-bold text-sm text-gray-200">{traderName}</td>
+                              <td className="py-4">
+                                <span className="text-sm font-mono text-purple-400 font-bold">{trade.amount_in} ETH</span>
+                                <span className="text-xs text-gray-500 mx-2">→</span>
+                                <span className="text-sm font-mono text-emerald-400 font-bold">{trade.amount_out ? `${Number(trade.amount_out).toFixed(2)} USDC` : 'USDC'}</span>
+                              </td>
+                              <td className="py-4">
+                                <a 
+                                  href={`https://sepolia.basescan.org/tx/${trade.copy_tx_hash}`} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-purple-400 font-mono hover:text-purple-300 flex items-center gap-1"
+                                >
+                                  {shortenAddress(trade.copy_tx_hash)}
+                                  <ExternalLink size={12} />
+                                </a>
+                              </td>
+                              <td className="py-4">
+                                <a 
+                                  href={trade.trader_tx_hash.startsWith('0xsimulated') ? '#' : `https://etherscan.io/tx/${trade.trader_tx_hash}`}
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className={`text-xs font-mono flex items-center gap-1 ${trade.trader_tx_hash.startsWith('0xsimulated') ? 'text-gray-500 pointer-events-none' : 'text-gray-400 hover:text-gray-300'}`}
+                                >
+                                  {trade.trader_tx_hash.startsWith('0xsimulated') ? 'Simulated Injection' : shortenAddress(trade.trader_tx_hash)}
+                                  {!trade.trader_tx_hash.startsWith('0xsimulated') && <ExternalLink size={12} />}
+                                </a>
+                              </td>
+                              <td className="py-4 text-xs text-gray-500 font-mono">{new Date(trade.timestamp).toLocaleString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
 
-                <div className="glass-panel console-main">
-                  {(() => {
-                    const q = SQL_QUERIES.find(x => x.id === selectedQueryId)!;
-                    return (
-                      <>
-                        <div className="code-header">
-                          <div className="code-header-info">
-                            <Terminal size={18} className="text-purple-400" />
-                            <h3 className="code-title">{q.title} Query</h3>
-                          </div>
+            {/* TAB CONTENT: ABOUT & SETUP */}
+            {activeTab === 'about' && (
+              <div className="glass-panel p-8 max-w-3xl mx-auto">
+                <h2 className="text-2xl font-bold mb-4 text-gray-100 flex items-center gap-2">
+                  <Shield className="text-purple-400" />
+                  AgentBook Registry & World ID Setup
+                </h2>
+                <p className="text-sm text-gray-400 leading-relaxed mb-6">
+                  World AgentKit uses the <strong>AgentBook</strong> smart contract registry on World Chain to map AI agent wallets to verified humans anonymously. This proves that an agent is backed by a real human, allowing services like Vouch to grant free trials (first 3 copy-trades free) safely without Sybil attacks.
+                </p>
+
+                <div className="flex flex-col gap-6">
+                  
+                  <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-900/30">
+                    <h3 className="font-bold text-sm text-purple-300 mb-2">How to register your copy-trading agent wallet:</h3>
+                    <ol className="list-decimal list-inside text-xs text-gray-400 flex flex-col gap-2">
+                      <li>Ensure you have the World App installed and are Orb-verified.</li>
+                      <li>Copy your **Copy-Trading Address** from the dashboard banner.</li>
+                      <li>In your terminal, run the AgentKit CLI registration command:
+                        <div className="bg-black/50 border border-white/5 p-3 rounded-lg font-mono text-purple-400 mt-2 flex justify-between items-center">
+                          <span>npx @worldcoin/agentkit-cli register &lt;your-wallet-address&gt;</span>
                           <button 
-                            className="code-btn"
-                            onClick={() => handleCopyCode(q.code)}
+                            onClick={() => {
+                              if (copyWallet) {
+                                navigator.clipboard.writeText(`npx @worldcoin/agentkit-cli register ${copyWallet.address}`);
+                                alert("CLI command copied to clipboard!");
+                              } else {
+                                alert("Please connect your wallet first!");
+                              }
+                            }}
+                            className="filter-btn text-xs"
+                            style={{ padding: '0.2rem 0.5rem' }}
                           >
-                            <Copy size={14} />
-                            {copiedQuery ? "Copied!" : "Copy SQL"}
+                            Copy Command
                           </button>
                         </div>
+                      </li>
+                      <li>Scan the printed QR code with your World App to authorize the agent.</li>
+                      <li>Once registered, Vouch will automatically link your agent executions to your World ID humanId for free trial copy-trades!</li>
+                    </ol>
+                  </div>
 
-                        <p className="text-sm text-gray-300 leading-relaxed mb-2">{q.desc}</p>
+                  <div className="p-4 rounded-xl bg-black/40 border border-white/5 text-xs text-gray-500 leading-relaxed">
+                    <span className="font-bold text-gray-400 block mb-1">Development / Demo Notice:</span>
+                    For hackathon evaluation convenience, **Vouch runs with Demo Mock Mode enabled by default**. If your wallet is not yet registered in AgentBook, the backend will gracefully fallback to a simulated `humanId` validation so you can inspect and test the free-trial usage counter decrement and x402 payment fallback blocks without needing a live World ID scan.
+                  </div>
 
-                        <pre>
-                          <code>
-                            {q.code.split('\n').map((line, idx) => {
-                              if (line.trim().startsWith('--')) {
-                                return <div key={idx} className="sql-comment">{line}</div>;
-                              }
-                              return <div key={idx}>{line}</div>;
-                            })}
-                          </code>
-                        </pre>
-
-                        <div className="flex items-start gap-3 bg-purple-950/20 border border-purple-900/30 p-4 rounded-lg text-sm text-purple-200">
-                          <Info size={16} className="text-purple-400 flex-shrink-0 mt-0.5" />
-                          <div>
-                            <strong>BigQuery Integration Note:</strong> These queries execute in real-time on our Go server against the 
-                            <code>bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs</code> table, which provides Ethereum event logs 
-                            synced on Google Cloud BigQuery in near real-time.
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
                 </div>
               </div>
             )}
 
           </div>
         )}
+
       </main>
-
-      {/* Setup Config Modal */}
-      {showSetupModal && (
-        <div className="modal-overlay" style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          background: 'rgba(6, 4, 10, 0.85)',
-          backdropFilter: 'blur(10px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '2rem'
-        }}>
-          <div className="glass-panel setup-page-container fade-in" style={{ margin: 0, maxWidth: '650px', background: 'var(--bg-base)', border: '1px solid var(--panel-border-hover)' }}>
-            <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4">
-              <h3 className="text-xl font-bold flex items-center gap-2">
-                <Key className="text-purple-400" />
-                GCP BigQuery Connection Setup
-              </h3>
-              <button 
-                onClick={() => setShowSetupModal(false)} 
-                className="code-btn"
-                style={{ padding: '0.25rem 0.6rem' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="setup-steps text-left mb-6" style={{ background: 'rgba(0,0,0,0.3)', maxHeight: '350px', overflowY: 'auto' }}>
-              <div className="setup-step">
-                <div className="step-num">1</div>
-                <div className="step-text">
-                  Go to your <strong>Google Cloud Console</strong> &gt; <strong>IAM &amp; Admin</strong> &gt; <strong>Service Accounts</strong>.
-                </div>
-              </div>
-              <div className="setup-step">
-                <div className="step-num">2</div>
-                <div className="step-text">
-                  Create a service account with the <strong>BigQuery User</strong> role (for reading public datasets).
-                </div>
-              </div>
-              <div className="setup-step">
-                <div className="step-num">3</div>
-                <div className="step-text">
-                  Create and download a new <strong>JSON Key</strong> for this service account.
-                </div>
-              </div>
-              <div className="setup-step">
-                <div className="step-num">4</div>
-                <div className="step-text">
-                  <strong>Locally (choose one in <code>.env</code>):</strong>
-                  <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    <li>Option A (File path outside repo):<br /><code style={{ display: 'inline-block', margin: '4px 0' }}>GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/downloaded-key.json</code></li>
-                    <li>Option B (Raw JSON string):<br /><code style={{ display: 'inline-block', margin: '4px 0' }}>{"GCP_SERVICE_ACCOUNT_JSON={\"type\": \"service_account\", ...}"}</code></li>
-                  </ul>
-                </div>
-              </div>
-              <div className="setup-step">
-                <div className="step-num">5</div>
-                <div className="step-text">
-                  <strong>On Heroku:</strong> Set it securely in the environment using:
-                  <br />
-                  <code style={{ fontSize: '0.8rem', display: 'inline-block', marginTop: '4px', wordBreak: 'break-all' }}>
-                    heroku config:set GCP_SERVICE_ACCOUNT_JSON="$(cat /path/to/your/key.json)"
-                  </code>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3">
-              <button 
-                onClick={() => setShowSetupModal(false)} 
-                className="filter-btn"
-              >
-                Close
-              </button>
-              <button 
-                onClick={handleTestConnection} 
-                disabled={testingConnection}
-                className="retry-btn flex items-center gap-2"
-                style={{ padding: '0.6rem 1.5rem', fontSize: '0.9rem' }}
-              >
-                {testingConnection ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                Test &amp; Connect Live
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Footer */}
-      <footer className="mt-auto border-t border-panel-border py-6 text-center text-xs text-text-muted">
-        <p>Trust402 Explorer &copy; 2026 - Powered by Google BigQuery Ethereum Logs Platform &amp; Go</p>
-      </footer>
     </>
   );
 }
