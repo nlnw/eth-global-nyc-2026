@@ -6,7 +6,15 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: 'dist/public',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      external: [
+        '@solana/kit',
+        '@solana-program/system',
+        '@solana/web3.js',
+        '@solana/wallet-adapter-base'
+      ]
+    }
   },
   server: {
     proxy: {

@@ -19,8 +19,6 @@
   "dependencies": {
     "@privy-io/node": "^0.21.0",
     "@privy-io/react-auth": "^3.30.0",
-    "@solana-program/system": "^0.12.2",
-    "@solana/kit": "^6.9.0",
     "@worldcoin/agentkit": "^0.2.0",
     "better-sqlite3": "^12.10.0",
     "concurrently": "^10.0.3",
