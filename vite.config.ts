@@ -15,7 +15,11 @@ export default defineConfig({
         '@solana-program/system',
         '@solana/web3.js',
         '@solana/wallet-adapter-base'
-      ]
+      ],
+      onwarn(warning, defaultWarn) {
+        if (warning.code === 'INVALID_ANNOTATION') return
+        defaultWarn(warning)
+      }
     },
     rolldownOptions: {
       external: [
@@ -25,7 +29,11 @@ export default defineConfig({
         '@solana-program/system',
         '@solana/web3.js',
         '@solana/wallet-adapter-base'
-      ]
+      ],
+      onwarn(warning, defaultWarn) {
+        if (warning.code === 'INVALID_ANNOTATION') return
+        defaultWarn(warning)
+      }
     }
   },
   server: {
