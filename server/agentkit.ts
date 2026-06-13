@@ -1,6 +1,8 @@
 import { createAgentBookVerifier } from "@worldcoin/agentkit";
 import { verifyMessage } from "viem";
 import { getDb } from "./db.js";
+import { agentkitUsage } from "./schema.js";
+import { eq, and } from "drizzle-orm";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -73,43 +75,35 @@ export async function tryIncrementHumanUsage(
   humanId: string,
   limit: number
 ): Promise<boolean> {
-  const db = await getDb();
+  const db = getDb();
   
-  // Wrap in SQLite transaction
-  await db.run("BEGIN TRANSACTION");
   try {
-    const row = await db.get(
-      "SELECT count FROM agentkit_usage WHERE endpoint = ? AND human_id = ?",
-      endpoint,
-      humanId
-    );
-    
-    const count = row ? row.count : 0;
-    if (count >= limit) {
-      await db.run("ROLLBACK");
-      return false;
-    }
-    
-    if (row) {
-      await db.run(
-        "UPDATE agentkit_usage SET count = count + 1 WHERE endpoint = ? AND human_id = ?",
-        endpoint,
-        humanId
-      );
-    } else {
-      await db.run(
-        "INSERT INTO agentkit_usage (endpoint, human_id, count) VALUES (?, ?, 1)",
-        endpoint,
-        humanId
-      );
-    }
-    
-    await db.run("COMMIT");
-    return true;
+    return db.transaction((tx) => {
+      const row = tx.select()
+        .from(agentkitUsage)
+        .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
+        .get();
+        
+      const count = row ? (row.count || 0) : 0;
+      if (count >= limit) {
+        return false;
+      }
+      
+      if (row) {
+        tx.update(agentkitUsage)
+          .set({ count: count + 1 })
+          .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
+          .run();
+      } else {
+        tx.insert(agentkitUsage)
+          .values({ endpoint, humanId, count: 1 })
+          .run();
+      }
+      return true;
+    });
   } catch (err) {
-    await db.run("ROLLBACK");
-    console.error("Database error in tryIncrementHumanUsage:", err);
-    throw err;
+    console.error("Transaction error in tryIncrementHumanUsage:", err);
+    return false;
   }
 }
 
@@ -117,11 +111,15 @@ export async function tryIncrementHumanUsage(
  * Returns the current usage count for a humanId
  */
 export async function getHumanUsageCount(endpoint: string, humanId: string): Promise<number> {
-  const db = await getDb();
-  const row = await db.get(
-    "SELECT count FROM agentkit_usage WHERE endpoint = ? AND human_id = ?",
-    endpoint,
-    humanId
-  );
-  return row ? row.count : 0;
+  try {
+    const db = getDb();
+    const row = db.select()
+      .from(agentkitUsage)
+      .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
+      .get();
+    return row ? (row.count || 0) : 0;
+  } catch (err) {
+    console.error("Database error in getHumanUsageCount:", err);
+    return 0;
+  }
 }

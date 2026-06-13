@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
+import { execSync } from "child_process";
 import { getDb, addFollow, removeFollow, getFollowedTraders, getTraders, addTrader, getTrades } from "./db.js";
 import { resolveName, reverse } from "./ens.js";
 import { getOrCreateWallet } from "./privy.js";
@@ -266,6 +267,16 @@ app.get("*splat", (req, res) => {
 
 // Bootstrap server
 const PORT = process.env.PORT || 5001;
+
+// Run database schema push on startup
+try {
+  console.log("Synchronizing database schema via Drizzle Kit...");
+  execSync("npx drizzle-kit push", { stdio: "inherit" });
+  console.log("Database schema synchronized successfully.");
+} catch (err) {
+  console.error("Database schema push failed:", err);
+}
+
 app.listen(PORT, () => {
   console.log(`Vouch backend listening on port ${PORT}`);
   

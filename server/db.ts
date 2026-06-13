@@ -1,176 +1,172 @@
-import sqlite3 from 'sqlite3';
-import { open, Database } from 'sqlite';
+import { createRequire } from 'module';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import path from 'path';
+import fs from 'fs';
+import * as schema from './schema.js';
+import { users, traders, follows, trades, agentkitUsage, agentkitNonces } from './schema.js';
 
-let dbInstance: Database | null = null;
+const require = createRequire(import.meta.url);
 
-export async function getDb(): Promise<Database> {
-  if (dbInstance) return dbInstance;
+let sqliteDbInstance: any = null;
+let drizzleDbInstance: any = null;
+
+const isBun = typeof (process as any).versions.bun !== 'undefined';
+
+export function getRawSqliteDb() {
+  if (sqliteDbInstance) return sqliteDbInstance;
   
   const dbPath = path.resolve(process.cwd(), 'data/vouch.db');
-  dbInstance = await open({
-    filename: dbPath,
-    driver: sqlite3.Database
-  });
   
-  await initDb(dbInstance);
-  return dbInstance;
+  // Auto-create parent directory (critical for Heroku and fresh local setups)
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+  if (isBun) {
+    const { Database } = require('bun:sqlite');
+    sqliteDbInstance = new Database(dbPath);
+  } else {
+    const Database = require('better-sqlite3');
+    sqliteDbInstance = new Database(dbPath);
+  }
+  return sqliteDbInstance;
 }
 
-async function initDb(db: Database) {
-  // Enable foreign keys
-  await db.run('PRAGMA foreign_keys = ON');
+export function getDb() {
+  if (drizzleDbInstance) return drizzleDbInstance;
+  
+  const sqlite = getRawSqliteDb();
 
-  // Users Table
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      wallet_id TEXT NOT NULL,
-      wallet_address TEXT NOT NULL,
-      private_key TEXT,
-      risk_limit REAL DEFAULT 0.05,
-      created_at INTEGER NOT NULL
-    )
-  `);
-
-  // Traders Table
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS traders (
-      address TEXT PRIMARY KEY,
-      ens_name TEXT,
-      avatar TEXT,
-      total_trades INTEGER DEFAULT 0,
-      pnl REAL DEFAULT 0.0,
-      winrate REAL DEFAULT 0.0,
-      created_at INTEGER NOT NULL
-    )
-  `);
-
-  // Follows Table
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS follows (
-      user_id TEXT,
-      trader_address TEXT,
-      multiplier REAL DEFAULT 1.0,
-      active INTEGER DEFAULT 1,
-      created_at INTEGER NOT NULL,
-      PRIMARY KEY (user_id, trader_address),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (trader_address) REFERENCES traders(address) ON DELETE CASCADE
-    )
-  `);
-
-  // Trades Table
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS trades (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      trader_address TEXT NOT NULL,
-      trader_tx_hash TEXT NOT NULL,
-      copy_tx_hash TEXT,
-      token_in TEXT NOT NULL,
-      token_out TEXT NOT NULL,
-      amount_in TEXT NOT NULL,
-      amount_out TEXT,
-      timestamp INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (trader_address) REFERENCES traders(address) ON DELETE CASCADE
-    )
-  `);
-
-  // AgentKit Usage Table (Free Trial)
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS agentkit_usage (
-      endpoint TEXT,
-      human_id TEXT,
-      count INTEGER DEFAULT 0,
-      PRIMARY KEY (endpoint, human_id)
-    )
-  `);
-
-  // AgentKit Nonces Table (Replay Protection)
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS agentkit_nonces (
-      nonce TEXT PRIMARY KEY,
-      timestamp INTEGER NOT NULL
-    )
-  `);
-
-  // Insert seed traders if empty
-  const count = await db.get('SELECT COUNT(*) as count FROM traders');
-  if (count && count.count === 0) {
+  // Seed default traders if empty
+  const countRow = sqlite.prepare('SELECT COUNT(*) as count FROM traders').get() as { count: number };
+  if (countRow && countRow.count === 0) {
     const now = Date.now();
-    // Seed some active mainnet (.eth) traders for leaderboard
-    await db.run('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
       '0xf16e4d81a014d3325136eb29fa0ceb6d2e539a432'.toLowerCase(), 'vitalik.eth', 'https://metadata.ens.domains/mainnet/avatar/vitalik.eth', 42, 12.5, 78.5, now
     );
-    await db.run('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
       '0xb8c77482e45f1f44de1745f52c74426c631bdd52'.toLowerCase(), 'jason.eth', null, 28, 4.2, 64.0, now
     );
-    await db.run('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
       '0xd8da6bf26964af9d7eed9e03e53415d37aa96045'.toLowerCase(), 'dave.eth', null, 15, -2.1, 40.0, now
     );
   }
+
+  if (isBun) {
+    const { drizzle } = require('drizzle-orm/bun-sqlite');
+    drizzleDbInstance = drizzle(sqlite, { schema });
+  } else {
+    const { drizzle } = require('drizzle-orm/better-sqlite3');
+    drizzleDbInstance = drizzle(sqlite, { schema });
+  }
+
+  return drizzleDbInstance;
 }
 
-// DB Helpers
+// DB Helpers using Drizzle ORM
 
 export async function getUser(userId: string) {
-  const db = await getDb();
-  return db.get('SELECT * FROM users WHERE id = ?', userId);
+  const db = getDb();
+  return db.select().from(users).where(eq(users.id, userId)).get();
 }
 
 export async function saveUser(userId: string, walletId: string, walletAddress: string, privateKey?: string) {
-  const db = await getDb();
+  const db = getDb();
   const now = Date.now();
-  return db.run(
-    'INSERT INTO users (id, wallet_id, wallet_address, private_key, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET wallet_id = excluded.wallet_id, wallet_address = excluded.wallet_address, private_key = excluded.private_key',
-    userId, walletId, walletAddress, privateKey || null, now
-  );
+  return db.insert(users)
+    .values({
+      id: userId,
+      walletId,
+      walletAddress,
+      privateKey: privateKey || null,
+      createdAt: now
+    })
+    .onConflictDoUpdate({
+      target: users.id,
+      set: { walletId, walletAddress, privateKey: privateKey || null }
+    })
+    .run();
 }
 
 export async function getFollowedTraders(userId: string) {
-  const db = await getDb();
-  return db.all(
-    'SELECT t.*, f.multiplier, f.active FROM follows f JOIN traders t ON f.trader_address = t.address WHERE f.user_id = ?',
-    userId
-  );
+  const db = getDb();
+  return db.select({
+    address: traders.address,
+    ensName: traders.ensName,
+    avatar: traders.avatar,
+    totalTrades: traders.totalTrades,
+    pnl: traders.pnl,
+    winrate: traders.winrate,
+    multiplier: follows.multiplier,
+    active: follows.active
+  })
+  .from(follows)
+  .innerJoin(traders, eq(follows.traderAddress, traders.address))
+  .where(eq(follows.userId, userId))
+  .all();
 }
 
 export async function addFollow(userId: string, traderAddress: string, multiplier = 1.0) {
-  const db = await getDb();
+  const db = getDb();
   const now = Date.now();
-  return db.run(
-    'INSERT INTO follows (user_id, trader_address, multiplier, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, trader_address) DO UPDATE SET multiplier = excluded.multiplier, active = 1',
-    userId, traderAddress.toLowerCase(), multiplier, now
-  );
+  return db.insert(follows)
+    .values({
+      userId,
+      traderAddress: traderAddress.toLowerCase(),
+      multiplier,
+      createdAt: now
+    })
+    .onConflictDoUpdate({
+      target: [follows.userId, follows.traderAddress],
+      set: { multiplier, active: 1 }
+    })
+    .run();
 }
 
 export async function removeFollow(userId: string, traderAddress: string) {
-  const db = await getDb();
-  return db.run('DELETE FROM follows WHERE user_id = ? AND trader_address = ?', userId, traderAddress.toLowerCase());
+  const db = getDb();
+  return db.delete(follows)
+    .where(and(eq(follows.userId, userId), eq(follows.traderAddress, traderAddress.toLowerCase())))
+    .run();
 }
 
 export async function getTraders() {
-  const db = await getDb();
-  return db.all('SELECT * FROM traders ORDER BY pnl DESC');
+  const db = getDb();
+  return db.select().from(traders).orderBy(desc(traders.pnl)).all();
 }
 
 export async function addTrader(address: string, ensName: string | null, avatar: string | null) {
-  const db = await getDb();
+  const db = getDb();
   const now = Date.now();
-  return db.run(
-    'INSERT INTO traders (address, ens_name, avatar, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET ens_name = excluded.ens_name, avatar = excluded.avatar',
-    address.toLowerCase(), ensName, avatar, now
-  );
+  return db.insert(traders)
+    .values({
+      address: address.toLowerCase(),
+      ensName,
+      avatar,
+      createdAt: now
+    })
+    .onConflictDoUpdate({
+      target: traders.address,
+      set: { ensName, avatar }
+    })
+    .run();
 }
 
 export async function getFollowersOfTrader(traderAddress: string) {
-  const db = await getDb();
-  return db.all(
-    'SELECT u.*, f.multiplier FROM follows f JOIN users u ON f.user_id = u.id WHERE f.trader_address = ? AND f.active = 1',
-    traderAddress.toLowerCase()
-  );
+  const db = getDb();
+  return db.select({
+    id: users.id,
+    walletId: users.walletId,
+    walletAddress: users.walletAddress,
+    privateKey: users.privateKey,
+    riskLimit: users.riskLimit,
+    multiplier: follows.multiplier
+  })
+  .from(follows)
+  .innerJoin(users, eq(follows.userId, users.id))
+  .where(and(
+    eq(follows.traderAddress, traderAddress.toLowerCase()),
+    eq(follows.active, 1)
+  ))
+  .all();
 }
 
 export async function recordTrade(
@@ -184,22 +180,37 @@ export async function recordTrade(
   amountIn: string,
   amountOut: string | null
 ) {
-  const db = await getDb();
+  const db = getDb();
   const now = Date.now();
-  
-  // Also increment total trade count for trader
-  await db.run(
-    'UPDATE traders SET total_trades = total_trades + 1 WHERE address = ?',
-    traderAddress.toLowerCase()
-  );
 
-  return db.run(
-    'INSERT INTO trades (id, user_id, trader_address, trader_tx_hash, copy_tx_hash, token_in, token_out, amount_in, amount_out, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, userId, traderAddress.toLowerCase(), traderTxHash, copyTxHash, tokenIn, tokenOut, amountIn, amountOut, now
-  );
+  // Increment trader trade count
+  db.update(traders)
+    .set({ totalTrades: sql`${traders.totalTrades} + 1` })
+    .where(eq(traders.address, traderAddress.toLowerCase()))
+    .run();
+
+  // Record trade
+  return db.insert(trades)
+    .values({
+      id,
+      userId,
+      traderAddress: traderAddress.toLowerCase(),
+      traderTxHash,
+      copyTxHash: copyTxHash || null,
+      tokenIn,
+      tokenOut,
+      amountIn,
+      amountOut: amountOut || null,
+      timestamp: now
+    })
+    .run();
 }
 
 export async function getTrades(userId: string) {
-  const db = await getDb();
-  return db.all('SELECT * FROM trades WHERE user_id = ? ORDER BY timestamp DESC', userId);
+  const db = getDb();
+  return db.select()
+    .from(trades)
+    .where(eq(trades.userId, userId))
+    .orderBy(desc(trades.timestamp))
+    .all();
 }

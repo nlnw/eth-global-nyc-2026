@@ -4,6 +4,8 @@ import { getDb, getFollowersOfTrader, recordTrade } from "./db.js";
 import { createAgentkitClient } from "@worldcoin/agentkit";
 import { privateKeyToAccount } from "viem/accounts";
 import { generatePrivateKey } from "viem/accounts";
+import { eq } from "drizzle-orm";
+import { follows, trades } from "./schema.js";
 
 dotenv.config();
 
@@ -53,7 +55,9 @@ export function startDetectionLoop(intervalMs = 15000) {
   setInterval(async () => {
     try {
       const db = await getDb();
-      const traders = await db.all("SELECT DISTINCT trader_address AS address FROM follows WHERE active = 1");
+      const traders = await db.selectDistinct({ address: follows.traderAddress })
+        .from(follows)
+        .where(eq(follows.active, 1));
       
       for (const trader of traders) {
         await pollTraderSwaps(trader.address);
@@ -92,7 +96,10 @@ async function pollTraderSwaps(traderAddress: string) {
 
       // Check if we've already stored this trade in db
       const db = await getDb();
-      const existingTrade = await db.get("SELECT id FROM trades WHERE trader_tx_hash = ?", txHash);
+      const existingTrade = await db.select({ id: trades.id })
+        .from(trades)
+        .where(eq(trades.traderTxHash, txHash))
+        .get();
       if (existingTrade) {
         processedTxHashes.add(txHash);
         continue;
