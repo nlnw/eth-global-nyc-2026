@@ -44,6 +44,8 @@ clean:
 
 # Deploy to Heroku
 deploy:
+	@echo "Pushing changes to origin main..."
+	git push origin main
 	@echo "Deploying latest commit to Heroku..."
 	git push heroku main
 
