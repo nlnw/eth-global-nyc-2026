@@ -1,35 +1,38 @@
-import { sqliteTable, text, integer, real, primaryKey } from 'drizzle-orm/sqlite-core';
+import { pgSchema, text, integer, bigint, real, primaryKey } from 'drizzle-orm/pg-core';
 
-export const users = sqliteTable('users', {
+// All tables live in the "hackathon" PostgreSQL schema
+const hackathon = pgSchema('hackathon');
+
+export const users = hackathon.table('users', {
   id: text('id').primaryKey(),
   walletId: text('wallet_id').notNull(),
   walletAddress: text('wallet_address').notNull(),
   privateKey: text('private_key'),
   riskLimit: real('risk_limit').default(0.05),
-  createdAt: integer('created_at').notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 });
 
-export const traders = sqliteTable('traders', {
+export const traders = hackathon.table('traders', {
   address: text('address').primaryKey(),
   ensName: text('ens_name'),
   avatar: text('avatar'),
   totalTrades: integer('total_trades').default(0),
   pnl: real('pnl').default(0.0),
   winrate: real('winrate').default(0.0),
-  createdAt: integer('created_at').notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 });
 
-export const follows = sqliteTable('follows', {
+export const follows = hackathon.table('follows', {
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   traderAddress: text('trader_address').notNull().references(() => traders.address, { onDelete: 'cascade' }),
   multiplier: real('multiplier').default(1.0),
   active: integer('active').default(1),
-  createdAt: integer('created_at').notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.userId, table.traderAddress] }),
 }));
 
-export const trades = sqliteTable('trades', {
+export const trades = hackathon.table('trades', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   traderAddress: text('trader_address').notNull().references(() => traders.address, { onDelete: 'cascade' }),
@@ -39,19 +42,19 @@ export const trades = sqliteTable('trades', {
   tokenOut: text('token_out').notNull(),
   amountIn: text('amount_in').notNull(),
   amountOut: text('amount_out'),
-  timestamp: integer('timestamp').notNull(),
+  timestamp: bigint('timestamp', { mode: 'number' }).notNull(),
 });
 
-export const agentkitUsage = sqliteTable('agentkit_usage', {
+export const agentkitUsage = hackathon.table('agentkit_usage', {
   endpoint: text('endpoint').notNull(),
   humanId: text('human_id').notNull(),
   count: integer('count').default(0),
-  purchased: integer('purchased').default(0), // extra trades purchased via WLD
+  purchased: integer('purchased').default(0),
 }, (table) => ({
   pk: primaryKey({ columns: [table.endpoint, table.humanId] }),
 }));
 
-export const agentkitNonces = sqliteTable('agentkit_nonces', {
+export const agentkitNonces = hackathon.table('agentkit_nonces', {
   nonce: text('nonce').primaryKey(),
-  timestamp: integer('timestamp').notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 });

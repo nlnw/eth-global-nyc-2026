@@ -1,182 +1,226 @@
-import { createRequire } from 'module';
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq, and, desc, sql } from 'drizzle-orm';
-import path from 'path';
-import fs from 'fs';
 import * as schema from './schema.js';
-import { users, traders, follows, trades, agentkitUsage, agentkitNonces } from './schema.js';
+import { users, traders, follows, trades, agentkitUsage } from './schema.js';
 
-const require = createRequire(import.meta.url);
-
-let sqliteDbInstance: any = null;
-let drizzleDbInstance: any = null;
-
-const isBun = typeof (process as any).versions.bun !== 'undefined';
-
-export function getRawSqliteDb() {
-  if (sqliteDbInstance) return sqliteDbInstance;
-  
-  const dbPath = path.resolve(process.cwd(), 'data/vouch.db');
-  
-  // Auto-create parent directory (critical for Heroku and fresh local setups)
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-
-  if (isBun) {
-    const { Database } = require('bun:sqlite');
-    sqliteDbInstance = new Database(dbPath);
-  } else {
-    const Database = require('better-sqlite3');
-    sqliteDbInstance = new Database(dbPath);
-  }
-  return sqliteDbInstance;
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is required. Copy .env.example to .env and fill it in.');
 }
+
+// Aiven Postgres requires SSL; rejectUnauthorized:false accepts their managed cert
+const client = postgres(DATABASE_URL, {
+  ssl: { rejectUnauthorized: false },
+  max: 10,
+  idle_timeout: 20,
+  connect_timeout: 10,
+});
+
+const db = drizzle(client, { schema });
 
 export function getDb() {
-  if (drizzleDbInstance) return drizzleDbInstance;
-  
-  const sqlite = getRawSqliteDb();
-
-  // Seed default traders if empty
-  // Seed default demo traders if table is empty
-  let countRow: { count: number } | undefined;
-  try {
-    countRow = sqlite.prepare('SELECT COUNT(*) as count FROM traders').get() as { count: number };
-  } catch {
-    // Table may not exist yet on a fresh DB; drizzle-kit push will create it
-    countRow = undefined;
-  }
-  if (countRow && countRow.count === 0) {
-    const now = Date.now();
-    // Real vitalik.eth address: 0xd8da6bf26964af9d7eed9e03e53415d37aa96045
-    sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      '0xd8da6bf26964af9d7eed9e03e53415d37aa96045', 'vitalik.eth', 'https://metadata.ens.domains/mainnet/avatar/vitalik.eth', 42, 12.5, 78.5, now
-    );
-    // hayden.eth — Uniswap founder, real ENS address
-    sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      '0x11e4857bb2993a1f60c58b5a0e7d0d7b9a6f0e5b', 'hayden.eth', null, 28, 4.2, 64.0, now
-    );
-    // demo3.eth — placeholder for a third leaderboard slot
-    sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      '0x1234567890123456789012345678901234567890', 'demo3.eth', null, 15, -2.1, 40.0, now
-    );
-  }
-
-  if (isBun) {
-    const { drizzle } = require('drizzle-orm/bun-sqlite');
-    drizzleDbInstance = drizzle(sqlite, { schema });
-  } else {
-    const { drizzle } = require('drizzle-orm/better-sqlite3');
-    drizzleDbInstance = drizzle(sqlite, { schema });
-  }
-
-  return drizzleDbInstance;
+  return db;
 }
 
-// DB Helpers using Drizzle ORM
+/**
+ * Idempotent schema bootstrap — runs CREATE TABLE IF NOT EXISTS for every table
+ * in the hackathon schema. Safe to call on every startup; never drops data.
+ * This replaces drizzle-kit push so there are no interactive prompts in CI/Heroku.
+ */
+export async function initSchema() {
+  console.log('[DB] Bootstrapping hackathon schema...');
+  // Create the schema if it doesn’t exist yet
+  await client`CREATE SCHEMA IF NOT EXISTS hackathon`;
+
+  await client`
+    CREATE TABLE IF NOT EXISTS hackathon.users (
+      id          TEXT PRIMARY KEY,
+      wallet_id   TEXT NOT NULL,
+      wallet_address TEXT NOT NULL,
+      private_key TEXT,
+      risk_limit  REAL DEFAULT 0.05,
+      created_at  BIGINT NOT NULL
+    )
+  `;
+
+  await client`
+    CREATE TABLE IF NOT EXISTS hackathon.traders (
+      address       TEXT PRIMARY KEY,
+      ens_name      TEXT,
+      avatar        TEXT,
+      total_trades  INTEGER DEFAULT 0,
+      pnl           REAL DEFAULT 0.0,
+      winrate       REAL DEFAULT 0.0,
+      created_at    BIGINT NOT NULL
+    )
+  `;
+
+  await client`
+    CREATE TABLE IF NOT EXISTS hackathon.follows (
+      user_id         TEXT NOT NULL REFERENCES hackathon.users(id) ON DELETE CASCADE,
+      trader_address  TEXT NOT NULL REFERENCES hackathon.traders(address) ON DELETE CASCADE,
+      multiplier      REAL DEFAULT 1.0,
+      active          INTEGER DEFAULT 1,
+      created_at      BIGINT NOT NULL,
+      PRIMARY KEY (user_id, trader_address)
+    )
+  `;
+
+  await client`
+    CREATE TABLE IF NOT EXISTS hackathon.trades (
+      id              TEXT PRIMARY KEY,
+      user_id         TEXT NOT NULL REFERENCES hackathon.users(id) ON DELETE CASCADE,
+      trader_address  TEXT NOT NULL REFERENCES hackathon.traders(address) ON DELETE CASCADE,
+      trader_tx_hash  TEXT NOT NULL,
+      copy_tx_hash    TEXT,
+      token_in        TEXT NOT NULL,
+      token_out       TEXT NOT NULL,
+      amount_in       TEXT NOT NULL,
+      amount_out      TEXT,
+      timestamp       BIGINT NOT NULL
+    )
+  `;
+
+  await client`
+    CREATE TABLE IF NOT EXISTS hackathon.agentkit_usage (
+      endpoint  TEXT NOT NULL,
+      human_id  TEXT NOT NULL,
+      count     INTEGER DEFAULT 0,
+      purchased INTEGER DEFAULT 0,
+      PRIMARY KEY (endpoint, human_id)
+    )
+  `;
+
+  await client`
+    CREATE TABLE IF NOT EXISTS hackathon.agentkit_nonces (
+      nonce      TEXT PRIMARY KEY,
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  console.log('[DB] Schema ready.');
+}
+
+/** Seed demo traders on first boot if the table is empty */
+export async function seedIfEmpty() {
+  try {
+    const existing = await db.select().from(traders).limit(1);
+    if (existing.length > 0) return;
+
+    const now = Date.now();
+    await db.insert(traders).values([
+      {
+        address: '0xd8da6bf26964af9d7eed9e03e53415d37aa96045',
+        ensName: 'vitalik.eth',
+        avatar: 'https://metadata.ens.domains/mainnet/avatar/vitalik.eth',
+        totalTrades: 42,
+        pnl: 12.5,
+        winrate: 78.5,
+        createdAt: now,
+      },
+      {
+        address: '0x11e4857bb2993a1f60c58b5a0e7d0d7b9a6f0e5b',
+        ensName: 'hayden.eth',
+        avatar: null,
+        totalTrades: 28,
+        pnl: 4.2,
+        winrate: 64.0,
+        createdAt: now,
+      },
+      {
+        address: '0x1234567890123456789012345678901234567890',
+        ensName: 'demo3.eth',
+        avatar: null,
+        totalTrades: 15,
+        pnl: -2.1,
+        winrate: 40.0,
+        createdAt: now,
+      },
+    ]).onConflictDoNothing();
+    console.log('[DB] Seeded demo traders.');
+  } catch (err) {
+    // Silently skip if schema not yet migrated; drizzle-kit push handles creation
+    console.warn('[DB] Seed skipped:', (err as Error).message);
+  }
+}
+
+// ─── DB Helpers ───────────────────────────────────────────────────────────────
 
 export async function getUser(userId: string) {
-  const db = getDb();
-  return db.select().from(users).where(eq(users.id, userId)).get();
+  return db.select().from(users).where(eq(users.id, userId)).limit(1).then(r => r[0] ?? null);
 }
 
 export async function saveUser(userId: string, walletId: string, walletAddress: string, privateKey?: string) {
-  const db = getDb();
   const now = Date.now();
   return db.insert(users)
-    .values({
-      id: userId,
-      walletId,
-      walletAddress,
-      privateKey: privateKey || null,
-      createdAt: now
-    })
+    .values({ id: userId, walletId, walletAddress, privateKey: privateKey || null, createdAt: now })
     .onConflictDoUpdate({
       target: users.id,
       set: { walletId, walletAddress, privateKey: privateKey || null }
-    })
-    .run();
+    });
 }
 
 export async function getFollowedTraders(userId: string) {
-  const db = getDb();
   return db.select({
     address: traders.address,
-    ensName: traders.ensName,
+    ens_name: traders.ensName,
     avatar: traders.avatar,
-    totalTrades: traders.totalTrades,
+    total_trades: traders.totalTrades,
     pnl: traders.pnl,
     winrate: traders.winrate,
     multiplier: follows.multiplier,
-    active: follows.active
+    active: follows.active,
   })
   .from(follows)
   .innerJoin(traders, eq(follows.traderAddress, traders.address))
-  .where(eq(follows.userId, userId))
-  .all();
+  .where(eq(follows.userId, userId));
 }
 
 export async function addFollow(userId: string, traderAddress: string, multiplier = 1.0) {
-  const db = getDb();
   const now = Date.now();
   return db.insert(follows)
-    .values({
-      userId,
-      traderAddress: traderAddress.toLowerCase(),
-      multiplier,
-      createdAt: now
-    })
+    .values({ userId, traderAddress: traderAddress.toLowerCase(), multiplier, createdAt: now })
     .onConflictDoUpdate({
       target: [follows.userId, follows.traderAddress],
       set: { multiplier, active: 1 }
-    })
-    .run();
+    });
 }
 
 export async function removeFollow(userId: string, traderAddress: string) {
-  const db = getDb();
   return db.delete(follows)
-    .where(and(eq(follows.userId, userId), eq(follows.traderAddress, traderAddress.toLowerCase())))
-    .run();
+    .where(and(eq(follows.userId, userId), eq(follows.traderAddress, traderAddress.toLowerCase())));
 }
 
 export async function getTraders() {
-  const db = getDb();
-  return db.select().from(traders).orderBy(desc(traders.pnl)).all();
+  return db.select().from(traders).orderBy(desc(traders.pnl));
 }
 
 export async function addTrader(address: string, ensName: string | null, avatar: string | null) {
-  const db = getDb();
   const now = Date.now();
   return db.insert(traders)
-    .values({
-      address: address.toLowerCase(),
-      ensName,
-      avatar,
-      createdAt: now
-    })
+    .values({ address: address.toLowerCase(), ensName, avatar, createdAt: now })
     .onConflictDoUpdate({
       target: traders.address,
       set: { ensName, avatar }
-    })
-    .run();
+    });
 }
 
 export async function getFollowersOfTrader(traderAddress: string) {
-  const db = getDb();
   return db.select({
     id: users.id,
     walletId: users.walletId,
     walletAddress: users.walletAddress,
     privateKey: users.privateKey,
     riskLimit: users.riskLimit,
-    multiplier: follows.multiplier
+    multiplier: follows.multiplier,
   })
   .from(follows)
   .innerJoin(users, eq(follows.userId, users.id))
   .where(and(
     eq(follows.traderAddress, traderAddress.toLowerCase()),
     eq(follows.active, 1)
-  ))
-  .all();
+  ));
 }
 
 export async function recordTrade(
@@ -190,37 +234,30 @@ export async function recordTrade(
   amountIn: string,
   amountOut: string | null
 ) {
-  const db = getDb();
   const now = Date.now();
 
   // Increment trader trade count
-  db.update(traders)
+  await db.update(traders)
     .set({ totalTrades: sql`${traders.totalTrades} + 1` })
-    .where(eq(traders.address, traderAddress.toLowerCase()))
-    .run();
+    .where(eq(traders.address, traderAddress.toLowerCase()));
 
-  // Record trade
-  return db.insert(trades)
-    .values({
-      id,
-      userId,
-      traderAddress: traderAddress.toLowerCase(),
-      traderTxHash,
-      copyTxHash: copyTxHash || null,
-      tokenIn,
-      tokenOut,
-      amountIn,
-      amountOut: amountOut || null,
-      timestamp: now
-    })
-    .run();
+  return db.insert(trades).values({
+    id,
+    userId,
+    traderAddress: traderAddress.toLowerCase(),
+    traderTxHash,
+    copyTxHash: copyTxHash || null,
+    tokenIn,
+    tokenOut,
+    amountIn,
+    amountOut: amountOut || null,
+    timestamp: now,
+  });
 }
 
 export async function getTrades(userId: string) {
-  const db = getDb();
   return db.select()
     .from(trades)
     .where(eq(trades.userId, userId))
-    .orderBy(desc(trades.timestamp))
-    .all();
+    .orderBy(desc(trades.timestamp));
 }

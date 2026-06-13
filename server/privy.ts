@@ -25,10 +25,10 @@ export async function getOrCreateWallet(userId: string): Promise<CopyWallet> {
   const existingUser = await getUser(userId);
   if (existingUser) {
     return {
-      id: existingUser.wallet_id,
-      address: existingUser.wallet_address,
-      privateKey: existingUser.private_key,
-      riskLimit: existingUser.risk_limit
+      id: existingUser.walletId,
+      address: existingUser.walletAddress,
+      privateKey: existingUser.privateKey,
+      riskLimit: existingUser.riskLimit || 0.05
     };
   }
 

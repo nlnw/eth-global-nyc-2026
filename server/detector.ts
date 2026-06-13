@@ -100,7 +100,8 @@ async function pollTraderSwaps(traderAddress: string) {
       const existingTrade = await db.select({ id: trades.id })
         .from(trades)
         .where(eq(trades.traderTxHash, txHash))
-        .get();
+        .limit(1)
+        .then(r => r[0] ?? null);
       if (existingTrade) {
         processedTxHashes.add(txHash);
         continue;
@@ -166,7 +167,7 @@ async function triggerCopyTrade(swap: DetectedSwap) {
 
   for (const follower of followers) {
     // Scale amount according to the follower's multiplier
-    const scaledAmount = (Number(swap.amountIn) * follower.multiplier).toString();
+    const scaledAmount = (Number(swap.amountIn) * (Number(follower.multiplier) || 1.0)).toString();
 
     try {
       console.log(`Triggering copy trade for follower ${follower.id}...`);

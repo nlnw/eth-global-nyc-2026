@@ -14,12 +14,11 @@
     "clean": "rm -rf dist",
     "deploy": "git push origin main && git push heroku main",
     "push": "bun run deploy",
-    "heroku-postbuild": "tsc -p tsconfig.json && vite build && tsc -p server/tsconfig.json && mkdir -p data && npx drizzle-kit push && rm -rf src public server tsconfig.json vite.config.ts eslint.config.js drizzle.config.ts"
+    "heroku-postbuild": "tsc -p tsconfig.json && vite build && tsc -p server/tsconfig.json && rm -rf src public server tsconfig.json vite.config.ts eslint.config.js drizzle.config.ts"
   },
   "dependencies": {
     "@privy-io/node": "^0.21.0",
     "@worldcoin/agentkit": "^0.2.0",
-    "better-sqlite3": "^12.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
@@ -27,6 +26,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
+    "postgres": "^3.4.9",
     "viem": "^2.52.2"
   },
   "devDependencies": {

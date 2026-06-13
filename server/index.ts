@@ -4,8 +4,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
-import { execSync } from "child_process";
-import { getDb, addFollow, removeFollow, getFollowedTraders, getTraders, addTrader, getTrades } from "./db.js";
+import { getDb, addFollow, removeFollow, getFollowedTraders, getTraders, addTrader, getTrades, seedIfEmpty, initSchema } from "./db.js";
 import { resolveName, reverse } from "./ens.js";
 import { getOrCreateWallet } from "./privy.js";
 import { executeCopyOnBaseSepolia, publicClient } from "./execute.js";
@@ -316,22 +315,9 @@ app.get("*splat", (_req, res) => {
 // Bootstrap server
 const PORT = process.env.PORT || 5001;
 
-// Run drizzle schema push only in non-production (Heroku postbuild handles it in prod)
-if (process.env.NODE_ENV !== "production") {
-  try {
-    console.log("Synchronizing database schema via Drizzle Kit...");
-    const isBun = typeof (process as any).versions.bun !== "undefined";
-    const cmd = isBun ? "bunx drizzle-kit push" : "npx drizzle-kit push";
-    execSync(cmd, { stdio: "inherit" });
-    console.log("Database schema synchronized successfully.");
-  } catch (err) {
-    console.error("Database schema push failed:", err);
-  }
-} else {
-  console.log("Production: skipping schema push on startup (handled by heroku-postbuild).");
-}
-
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Vouch backend listening on port ${PORT}`);
+  await initSchema();
+  await seedIfEmpty();
   startDetectionLoop(15000);
 });

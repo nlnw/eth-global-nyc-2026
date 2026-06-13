@@ -7,68 +7,59 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Create the AgentBook verifier to look up agent wallets on World Chain
 export const agentBook = createAgentBookVerifier();
 
-/**
- * Verifies that the agent wallet address signed the challenge message
- */
+/** Verifies the agent wallet address signed the challenge message */
 export async function verifySignature(
   address: string,
   message: string,
   signature: string
 ): Promise<boolean> {
   try {
-    const valid = await verifyMessage({
+    return await verifyMessage({
       address: address as `0x${string}`,
       message,
       signature: signature as `0x${string}`
     });
-    return valid;
   } catch (err) {
     console.error("Signature verification failed:", err);
     return false;
   }
 }
 
-/**
- * Resolves an agent wallet address to their anonymous World ID humanId via AgentBook
- */
+/** Resolves an agent wallet address to a World ID humanId via AgentBook */
 export async function getHumanId(address: string): Promise<string | null> {
   try {
-    console.log(`Looking up humanId for agent address ${address} on AgentBook...`);
+    console.log(`Looking up humanId for ${address} on AgentBook...`);
     const humanId = await agentBook.lookupHuman(address);
-    
+
     if (humanId) {
-      console.log(`AgentBook match found! humanId: ${humanId}`);
+      console.log(`AgentBook match: humanId = ${humanId}`);
       return humanId;
     }
-    
-    console.log(`No AgentBook registration found for ${address}.`);
-    
-    // Demo/Mock Fallback: if MOCK_AGENTBOOK is enabled or unset, we fall back to a mock humanId
-    // so that the judge/developer can demo the free-trial mechanics without requiring a real World ID scan.
-    if (process.env.MOCK_AGENTBOOK !== "false") {
-      const mockHumanId = `mock_human_${address.toLowerCase().substring(0, 10)}`;
-      console.log(`[Demo Mode] Falling back to mock humanId: ${mockHumanId}`);
-      return mockHumanId;
-    }
 
+    console.log(`No AgentBook registration for ${address}.`);
+
+    if (process.env.MOCK_AGENTBOOK !== "false") {
+      const mockId = `mock_human_${address.toLowerCase().substring(0, 10)}`;
+      console.log(`[Demo Mode] Using mock humanId: ${mockId}`);
+      return mockId;
+    }
     return null;
   } catch (err) {
     console.error("AgentBook lookup failed:", err);
     if (process.env.MOCK_AGENTBOOK !== "false") {
-      const mockHumanId = `mock_human_${address.toLowerCase().substring(0, 10)}`;
-      console.log(`[Demo Mode Fallback] Lookup errored, using mock humanId: ${mockHumanId}`);
-      return mockHumanId;
+      const mockId = `mock_human_${address.toLowerCase().substring(0, 10)}`;
+      console.log(`[Demo Mode Fallback] Using mock humanId: ${mockId}`);
+      return mockId;
     }
     return null;
   }
 }
 
 /**
- * Tracks usage per humanId. Verified humans get up to `limit` (e.g. 3) free trades.
- * Returns true if successfully incremented (free trade granted), false if limit exceeded.
+ * Atomically checks and increments the usage counter for a humanId.
+ * Returns true if the trade is granted (within limit), false if exhausted.
  */
 export async function tryIncrementHumanUsage(
   endpoint: string,
@@ -76,31 +67,27 @@ export async function tryIncrementHumanUsage(
   limit: number
 ): Promise<boolean> {
   const db = getDb();
-  
+
   try {
-    return db.transaction((tx) => {
-      const row = tx.select()
+    return await db.transaction(async (tx) => {
+      const rows = await tx.select()
         .from(agentkitUsage)
-        .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
-        .get();
-        
-      const count = row ? (row.count || 0) : 0;
-      const purchased = row ? (row.purchased || 0) : 0;
-      // Dynamic limit: 3 free trials + any WLD-purchased extra trades
-      const effectiveLimit = limit + purchased;
-      if (count >= effectiveLimit) {
-        return false;
-      }
-      
+        .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)));
+
+      const row = rows[0] ?? null;
+      const count = row?.count ?? 0;
+      const purchased = row?.purchased ?? 0;
+      const effectiveLimit = limit + purchased; // 3 free + any WLD-purchased
+
+      if (count >= effectiveLimit) return false;
+
       if (row) {
-        tx.update(agentkitUsage)
+        await tx.update(agentkitUsage)
           .set({ count: count + 1 })
-          .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
-          .run();
+          .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)));
       } else {
-        tx.insert(agentkitUsage)
-          .values({ endpoint, humanId, count: 1 })
-          .run();
+        await tx.insert(agentkitUsage)
+          .values({ endpoint, humanId, count: 1, purchased: 0 });
       }
       return true;
     });
@@ -110,44 +97,31 @@ export async function tryIncrementHumanUsage(
   }
 }
 
-/**
- * Returns the current usage count for a humanId
- */
+/** Returns the current usage count for a humanId */
 export async function getHumanUsageCount(endpoint: string, humanId: string): Promise<number> {
   try {
-    const db = getDb();
-    const row = db.select()
+    const rows = await getDb().select()
       .from(agentkitUsage)
-      .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
-      .get();
-    return row ? (row.count || 0) : 0;
+      .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)));
+    return rows[0]?.count ?? 0;
   } catch (err) {
-    console.error("Database error in getHumanUsageCount:", err);
+    console.error("DB error in getHumanUsageCount:", err);
     return 0;
   }
 }
 
-/**
- * Resets human usage count to 0 (refills free copy-trades)
- */
+/** Resets usage count to 0 (World ID re-verification refills free trades) */
 export async function resetHumanUsage(endpoint: string, humanId: string): Promise<void> {
-  const db = getDb();
-  await db.insert(agentkitUsage)
-    .values({
-      endpoint,
-      humanId,
-      count: 0
-    })
+  await getDb().insert(agentkitUsage)
+    .values({ endpoint, humanId, count: 0, purchased: 0 })
     .onConflictDoUpdate({
       target: [agentkitUsage.endpoint, agentkitUsage.humanId],
       set: { count: 0 }
-    })
-    .run();
+    });
 }
 
 /**
- * Adds extra purchased copy-trades for a humanId (paid via WLD simulation)
- * Returns the new total purchased count.
+ * Adds WLD-purchased extra copy-trades. Returns the new total purchased count.
  */
 export async function purchaseExtraTrades(
   endpoint: string,
@@ -155,23 +129,22 @@ export async function purchaseExtraTrades(
   amount: number
 ): Promise<number> {
   const db = getDb();
-  return db.transaction((tx) => {
-    const row = tx.select()
+
+  return db.transaction(async (tx) => {
+    const rows = await tx.select()
       .from(agentkitUsage)
-      .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
-      .get();
-    const currentPurchased = row ? (row.purchased || 0) : 0;
-    const newPurchased = currentPurchased + amount;
-    
+      .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)));
+
+    const row = rows[0] ?? null;
+    const newPurchased = (row?.purchased ?? 0) + amount;
+
     if (row) {
-      tx.update(agentkitUsage)
+      await tx.update(agentkitUsage)
         .set({ purchased: newPurchased })
-        .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
-        .run();
+        .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)));
     } else {
-      tx.insert(agentkitUsage)
-        .values({ endpoint, humanId, count: 0, purchased: newPurchased })
-        .run();
+      await tx.insert(agentkitUsage)
+        .values({ endpoint, humanId, count: 0, purchased: newPurchased });
     }
     return newPurchased;
   });
