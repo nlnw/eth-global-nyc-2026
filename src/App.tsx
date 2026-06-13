@@ -266,7 +266,7 @@ export default function App() {
       setShowSetupModal(false);
       alert("Successfully connected to live BigQuery Ethereum mainnet dataset!");
     } else {
-      alert("Connection failed. Make sure 'gcp-service-account.json' and '.env' are correctly configured in the project root.");
+      alert("Connection failed. Please verify that your credentials (file path or JSON string) are correctly configured in your .env file.");
     }
     setTestingConnection(false);
   };
@@ -914,21 +914,27 @@ export default function App() {
               <div className="setup-step">
                 <div className="step-num">3</div>
                 <div className="step-text">
-                  Create a new <strong>JSON Key</strong> for this service account, download it, and rename it to <code>gcp-service-account.json</code>.
+                  Create and download a new <strong>JSON Key</strong> for this service account.
                 </div>
               </div>
               <div className="setup-step">
                 <div className="step-num">4</div>
                 <div className="step-text">
-                  Place <code>gcp-service-account.json</code> in the project's root folder: <br />
-                  <code style={{ fontSize: '11px', display: 'inline-block', marginTop: '6px', wordBreak: 'break-all' }}>/Users/jlin/work/eth-global-nyc-2026/gcp-service-account.json</code>
+                  <strong>Locally (choose one in <code>.env</code>):</strong>
+                  <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    <li>Option A (File path outside repo):<br /><code style={{ display: 'inline-block', margin: '4px 0' }}>GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/downloaded-key.json</code></li>
+                    <li>Option B (Raw JSON string):<br /><code style={{ display: 'inline-block', margin: '4px 0' }}>{"GCP_SERVICE_ACCOUNT_JSON={\"type\": \"service_account\", ...}"}</code></li>
+                  </ul>
                 </div>
               </div>
               <div className="setup-step">
                 <div className="step-num">5</div>
                 <div className="step-text">
-                  Create a <code>.env</code> file in the root folder with:<br />
-                  <code>GOOGLE_APPLICATION_CREDENTIALS=gcp-service-account.json</code>
+                  <strong>On Heroku:</strong> Set it securely in the environment using:
+                  <br />
+                  <code style={{ fontSize: '0.8rem', display: 'inline-block', marginTop: '4px', wordBreak: 'break-all' }}>
+                    heroku config:set GCP_SERVICE_ACCOUNT_JSON="$(cat /path/to/your/key.json)"
+                  </code>
                 </div>
               </div>
             </div>
