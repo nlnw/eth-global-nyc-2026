@@ -259,24 +259,52 @@ func main() {
 }
 
 func setupGCPAuth() {
-	// Check if local JSON file exists and programmatically set GOOGLE_APPLICATION_CREDENTIALS
+	// 1. Check if local JSON file exists and programmatically set GOOGLE_APPLICATION_CREDENTIALS
 	localCreds := "./gcp-service-account.json"
 	if _, err := os.Stat(localCreds); err == nil {
 		os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", localCreds)
 		log.Println("Found gcp-service-account.json, set GOOGLE_APPLICATION_CREDENTIALS environment variable")
 	}
 
+	// 2. Check if raw JSON string is provided in environment (common on Heroku)
+	rawJSON := os.Getenv("GCP_SERVICE_ACCOUNT_JSON")
+	ctx := context.Background()
+	var err error
+
+	if rawJSON != "" {
+		// Extract project_id from raw JSON
+		var credsMap map[string]interface{}
+		if err := json.Unmarshal([]byte(rawJSON), &credsMap); err == nil {
+			if pid, ok := credsMap["project_id"].(string); ok {
+				projectID = pid
+			}
+		}
+		if projectID == "" {
+			projectID = "agent-trust-explorer"
+		}
+
+		bqClient, err = bigquery.NewClient(ctx, projectID, option.WithCredentialsJSON([]byte(rawJSON)))
+		if err != nil {
+			hasCreds = false
+			authErrStr = fmt.Sprintf("Failed to initialize BigQuery with GCP_SERVICE_ACCOUNT_JSON: %v", err)
+		} else {
+			hasCreds = true
+			authErrStr = ""
+		}
+		return
+	}
+
+	// 3. Fallback to file path credentials
 	credsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	if credsPath == "" {
 		hasCreds = false
-		authErrStr = "GOOGLE_APPLICATION_CREDENTIALS is not set and gcp-service-account.json is missing"
+		authErrStr = "GOOGLE_APPLICATION_CREDENTIALS / GCP_SERVICE_ACCOUNT_JSON are not set and gcp-service-account.json is missing"
 		return
 	}
 
 	// Parse Project ID from credentials file if possible, or environment variable
 	projectID = os.Getenv("GCP_PROJECT_ID")
 	if projectID == "" {
-		// Attempt to extract project_id from credentials JSON
 		if fileBytes, err := os.ReadFile(credsPath); err == nil {
 			var credsMap map[string]interface{}
 			if err := json.Unmarshal(fileBytes, &credsMap); err == nil {
@@ -288,17 +316,13 @@ func setupGCPAuth() {
 	}
 
 	if projectID == "" {
-		// Fallback project ID for billing
 		projectID = "agent-trust-explorer"
 	}
 
-	// Try to initialize BigQuery client
-	ctx := context.Background()
-	var err error
 	bqClient, err = bigquery.NewClient(ctx, projectID, option.WithCredentialsFile(credsPath))
 	if err != nil {
 		hasCreds = false
-		authErrStr = fmt.Sprintf("Failed to create BigQuery client: %v", err)
+		authErrStr = fmt.Sprintf("Failed to create BigQuery client with file: %v", err)
 	} else {
 		hasCreds = true
 		authErrStr = ""
