@@ -275,14 +275,18 @@ app.get("*splat", (req, res) => {
 const PORT = process.env.PORT || 5001;
 
 // Run database schema push on startup
-try {
-  console.log("Synchronizing database schema via Drizzle Kit...");
-  const isBun = typeof (process as any).versions.bun !== "undefined";
-  const cmd = isBun ? "bunx drizzle-kit push" : "npx drizzle-kit push";
-  execSync(cmd, { stdio: "inherit" });
-  console.log("Database schema synchronized successfully.");
-} catch (err) {
-  console.error("Database schema push failed:", err);
+if (process.env.NODE_ENV !== "production") {
+  try {
+    console.log("Synchronizing database schema via Drizzle Kit...");
+    const isBun = typeof (process as any).versions.bun !== "undefined";
+    const cmd = isBun ? "bunx drizzle-kit push" : "npx drizzle-kit push";
+    execSync(cmd, { stdio: "inherit" });
+    console.log("Database schema synchronized successfully.");
+  } catch (err) {
+    console.error("Database schema push failed:", err);
+  }
+} else {
+  console.log("Production environment: skipping schema push on startup.");
 }
 
 app.listen(PORT, () => {
