@@ -260,7 +260,7 @@ const publicPath = path.resolve(process.cwd(), "dist/public");
 app.use(express.static(publicPath));
 
 // Fallback to index.html for React Router compatibility
-app.get("*", (req, res) => {
+app.get("*splat", (req, res) => {
   res.sendFile(path.resolve(publicPath, "index.html"));
 });
 
