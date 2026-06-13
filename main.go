@@ -20,10 +20,11 @@ import (
 
 // Global BigQuery client and config
 var (
-	bqClient   *bigquery.Client
-	projectID  string
-	hasCreds   bool
-	authErrStr string
+	bqClient       *bigquery.Client
+	projectID      string
+	hasCreds       bool
+	authErrStr     string
+	bqLastQueryErr string
 )
 
 // Agent struct represents an AI Agent compliant with ERC-8004
@@ -331,6 +332,7 @@ func setupGCPAuth() {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[API Request] %s %s", r.Method, r.URL.Path)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With")
@@ -353,12 +355,26 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	errStr := authErrStr
+	if errStr == "" && bqLastQueryErr != "" {
+		errStr = bqLastQueryErr
+	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"connected":  hasCreds,
+		"connected":  hasCreds && bqLastQueryErr == "",
 		"project_id": projectID,
-		"error":      authErrStr,
-		"using_mock": !hasCreds,
+		"error":      errStr,
+		"using_mock": !hasCreds || bqLastQueryErr != "",
 	})
+}
+
+func getLookbackDate() string {
+	lookbackDays := 7
+	if envDays := os.Getenv("BIGQUERY_LOOKBACK_DAYS"); envDays != "" {
+		if val, err := strconv.Atoi(envDays); err == nil {
+			lookbackDays = val
+		}
+	}
+	return time.Now().AddDate(0, 0, -lookbackDays).Format("2006-01-02")
 }
 
 func handleAgents(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +387,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := context.Background()
+	lookback := getLookbackDate()
 	sql := `
 		WITH agents AS (
 			SELECT
@@ -384,7 +401,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432' -- IdentityRegistry
 				AND topics[SAFE_OFFSET(0)] = '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a' -- Registered
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 		),
 		scores AS (
 			SELECT
@@ -397,7 +414,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004baa17c55a88189ae136b182e5fda19de9b63' -- ReputationRegistry
 				AND topics[SAFE_OFFSET(0)] = '0x6a4a61743519c9d648a14e6493f47dbe3ff1aa29e7785c96c8326a205e58febc' -- NewFeedback
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 				AND SUBSTR(data, 67, 1) != 'f'
 			GROUP BY 1
 		),
@@ -408,7 +425,7 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004bc032c525f0e136b182e5fda19de9b63a432' -- ValidationRegistry (Mock/Presumed address)
 				AND topics[SAFE_OFFSET(0)] = '0xec26fe413a23ab786a14e6493f47dbe3ff1aa29e7785c96c8326a205e58fedc' -- Validated event signature
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 		)
 		SELECT 
 			a.agent_id, 
@@ -462,9 +479,12 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 	q := bqClient.Query(sql)
 	it, err := q.Read(ctx)
 	if err != nil {
+		bqLastQueryErr = fmt.Sprintf("BigQuery error: %v", err)
+		log.Printf("[BigQuery Error] handleAgents query read: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("BigQuery error: %v", err))
 		return
 	}
+	bqLastQueryErr = ""
 
 	agents := []Agent{}
 	for {
@@ -474,6 +494,8 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
+			bqLastQueryErr = fmt.Sprintf("Iterator error: %v", err)
+			log.Printf("[BigQuery Error] handleAgents iterator: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Iterator error: %v", err))
 			return
 		}
@@ -527,48 +549,53 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(agents)
 }
 
+type LeaderboardItem struct {
+	AgentID       int64   `json:"agent_id"`
+	FeedbackCount int64   `json:"feedback_count"`
+	UniqueClients int64   `json:"unique_clients"`
+	AvgScore      float64 `json:"avg_score"`
+	Name          string  `json:"name"`
+	X402Support   bool    `json:"x402_support"`
+}
+
+func writeMockLeaderboard(w http.ResponseWriter) {
+	items := []LeaderboardItem{}
+	for _, a := range mockAgents {
+		if a.UniqueClients >= 3 {
+			items = append(items, LeaderboardItem{
+				AgentID:       a.AgentID,
+				FeedbackCount: a.UniqueClients * 2, // arbitrary mock ratio
+				UniqueClients: a.UniqueClients,
+				AvgScore:      a.AvgScore,
+				Name:          a.Name,
+				X402Support:   a.X402Support,
+			})
+		}
+	}
+
+	// Quick bubble sort for display ranking
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[i].AvgScore < items[j].AvgScore {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(items)
+}
+
 func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// If no credentials, fall back to mock leaderboard items
 	if !hasCreds || bqClient == nil {
-		type LeaderboardItem struct {
-			AgentID       int64   `json:"agent_id"`
-			FeedbackCount int64   `json:"feedback_count"`
-			UniqueClients int64   `json:"unique_clients"`
-			AvgScore      float64 `json:"avg_score"`
-			Name          string  `json:"name"`
-			X402Support   bool    `json:"x402_support"`
-		}
-
-		items := []LeaderboardItem{}
-		for _, a := range mockAgents {
-			if a.UniqueClients >= 3 {
-				items = append(items, LeaderboardItem{
-					AgentID:       a.AgentID,
-					FeedbackCount: a.UniqueClients * 2, // arbitrary mock ratio
-					UniqueClients: a.UniqueClients,
-					AvgScore:      a.AvgScore,
-					Name:          a.Name,
-					X402Support:   a.X402Support,
-				})
-			}
-		}
-
-		// Quick bubble sort for display ranking
-		for i := 0; i < len(items); i++ {
-			for j := i + 1; j < len(items); j++ {
-				if items[i].AvgScore < items[j].AvgScore {
-					items[i], items[j] = items[j], items[i]
-				}
-			}
-		}
-
-		_ = json.NewEncoder(w).Encode(items)
+		writeMockLeaderboard(w)
 		return
 	}
 
 	ctx := context.Background()
+	lookback := getLookbackDate()
 	sql := `
 		WITH feedback AS (
 			SELECT
@@ -579,7 +606,7 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004baa17c55a88189ae136b182e5fda19de9b63'                 -- ReputationRegistry address
 				AND topics[SAFE_OFFSET(0)] = '0x6a4a61743519c9d648a14e6493f47dbe3ff1aa29e7785c96c8326a205e58febc'    -- NewFeedback event
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 				AND SUBSTR(data, 67, 1) != 'f'
 		),
 		agents AS (
@@ -593,7 +620,7 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432' 
 				AND topics[SAFE_OFFSET(0)] = '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a'
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 		)
 		SELECT 
 			a.agent_id, 
@@ -625,9 +652,12 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	q := bqClient.Query(sql)
 	it, err := q.Read(ctx)
 	if err != nil {
+		bqLastQueryErr = fmt.Sprintf("BigQuery error: %v", err)
+		log.Printf("[BigQuery Error] handleLeaderboard query read: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("BigQuery error: %v", err))
 		return
 	}
+	bqLastQueryErr = ""
 
 	type LeaderboardItem struct {
 		AgentID       int64   `json:"agent_id"`
@@ -646,6 +676,8 @@ func handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
+			bqLastQueryErr = fmt.Sprintf("Iterator error: %v", err)
+			log.Printf("[BigQuery Error] handleLeaderboard iterator: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Iterator error: %v", err))
 			return
 		}
@@ -689,6 +721,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := context.Background()
+	lookback := getLookbackDate()
 	sql := `
 		WITH agents AS (
 			SELECT
@@ -701,7 +734,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432'
 				AND topics[SAFE_OFFSET(0)] = '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a'
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 		),
 		scores AS (
 			SELECT
@@ -713,7 +746,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 			FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 			WHERE address = '0x8004baa17c55a88189ae136b182e5fda19de9b63'
 				AND topics[SAFE_OFFSET(0)] = '0x6a4a61743519c9d648a14e6493f47dbe3ff1aa29e7785c96c8326a205e58febc'
-				AND block_timestamp >= TIMESTAMP '2026-01-28'
+				AND block_timestamp >= TIMESTAMP '` + lookback + `'
 				AND SUBSTR(data, 67, 1) != 'f'
 			GROUP BY 1
 		),
@@ -741,13 +774,18 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	q := bqClient.Query(sql)
 	it, err := q.Read(ctx)
 	if err != nil {
+		bqLastQueryErr = fmt.Sprintf("BigQuery error: %v", err)
+		log.Printf("[BigQuery Error] handleStats query read: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("BigQuery error: %v", err))
 		return
 	}
+	bqLastQueryErr = ""
 
 	var values []bigquery.Value
 	err = it.Next(&values)
 	if err != nil && err != iterator.Done {
+		bqLastQueryErr = fmt.Sprintf("Iterator error: %v", err)
+		log.Printf("[BigQuery Error] handleStats iterator: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Iterator error: %v", err))
 		return
 	}
@@ -779,13 +817,14 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := context.Background()
+	lookback := getLookbackDate()
 	sql := `
 		SELECT
 			DATE(block_timestamp) AS day,
 			COUNT(*)              AS new_agents
 		FROM ` + "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.logs`" + `
 		WHERE address = '0x8004a169fb4a3325136eb29fa0ceb6d2e539a432'
-			AND block_timestamp >= TIMESTAMP '2026-01-28'
+			AND block_timestamp >= TIMESTAMP '` + lookback + `'
 			AND topics[SAFE_OFFSET(0)] = '0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a'
 		GROUP BY day
 		ORDER BY day;
@@ -794,9 +833,12 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	q := bqClient.Query(sql)
 	it, err := q.Read(ctx)
 	if err != nil {
+		bqLastQueryErr = fmt.Sprintf("BigQuery error: %v", err)
+		log.Printf("[BigQuery Error] handleAnalytics query read: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("BigQuery error: %v", err))
 		return
 	}
+	bqLastQueryErr = ""
 
 	items := []DailyRegistration{}
 	for {
@@ -806,6 +848,8 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
+			bqLastQueryErr = fmt.Sprintf("Iterator error: %v", err)
+			log.Printf("[BigQuery Error] handleAnalytics iterator: %v", err)
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Iterator error: %v", err))
 			return
 		}
