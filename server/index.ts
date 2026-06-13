@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
 import { execSync } from "child_process";
@@ -13,22 +15,49 @@ import { startDetectionLoop, simulateTraderSwap } from "./detector.js";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// Security headers
+app.use(helmet({ contentSecurityPolicy: false })); // CSP off so React SPA loads fine
+
+// Allow same-origin requests from the React frontend
+app.use(cors({ origin: process.env.ALLOWED_ORIGIN || true }));
+
 app.use(express.json());
 
-// Log all incoming requests for debugging
-app.use((req, res, next) => {
-  console.log(`[HTTP] ${req.method} ${req.url} - query:`, req.query, "body:", req.body);
+// Light request logger (method + path only, no body dump in prod)
+app.use((req, _res, next) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[HTTP] ${req.method} ${req.path}`);
+  }
   next();
 });
 
-// In-memory nonce store for AgentKit challenges
+// In-memory nonce store for AgentKit challenges (cleared on restart — acceptable for demo)
 const activeNonces = new Set<string>();
 
+// Rate limiter for the copy-trade endpoint (fund-moving, abuse target)
+const copyLimiter = rateLimit({
+  windowMs: 60_000,       // 1 minute window
+  max: 20,                // 20 copy attempts per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many copy-trade requests, please slow down." }
+});
+
+// Generic API rate limiter
+const apiLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+app.use("/api/", apiLimiter);
+
 // 1. Status Check
-app.get("/api/status", async (req, res) => {
+app.get("/api/status", (_req, res) => {
   try {
-    const db = await getDb();
+    getDb(); // ensures DB is reachable
     res.json({
       status: "online",
       database: "connected",
@@ -41,7 +70,7 @@ app.get("/api/status", async (req, res) => {
 });
 
 // 2. Leaderboard Traders
-app.get("/api/traders", async (req, res) => {
+app.get("/api/traders", async (_req, res) => {
   try {
     const traders = await getTraders();
     res.json(traders);
@@ -52,7 +81,6 @@ app.get("/api/traders", async (req, res) => {
 
 // 3. Get User Wallet
 import { formatEther } from "viem";
-// ...
 app.post("/api/get-wallet", async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -86,22 +114,13 @@ app.post("/api/follow", async (req, res) => {
       return res.status(400).json({ error: `Could not resolve ENS name: ${ensName}` });
     }
 
-    // Perform reverse-resolution to get avatar / canonical name
     const { name, avatar } = await reverse(resolvedAddress);
-
-    // Save trader to database
     await addTrader(resolvedAddress, name || ensName, avatar);
-
-    // Add follow relationship
     await addFollow(userId, resolvedAddress, multiplier || 1.0);
 
     res.json({
       success: true,
-      trader: {
-        address: resolvedAddress,
-        ensName: name || ensName,
-        avatar
-      }
+      trader: { address: resolvedAddress, ensName: name || ensName, avatar }
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -157,28 +176,22 @@ app.post("/api/simulate-swap", async (req, res) => {
     return res.status(400).json({ error: "Missing swap simulation parameters" });
   }
   try {
-    const txHash = await simulateTraderSwap(
-      traderAddress,
-      tokenIn,
-      tokenOut,
-      amountIn,
-      amountOut
-    );
+    const txHash = await simulateTraderSwap(traderAddress, tokenIn, tokenOut, amountIn, amountOut);
     res.json({ success: true, simulatedTxHash: txHash });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 9. World ID AgentKit-Gated Gopy-Trading Route
-app.post("/api/copy", async (req, res) => {
+// 9. World ID AgentKit-Gated Copy-Trading Route
+app.post("/api/copy", copyLimiter, async (req, res) => {
   const { userId, swap, signature, challenge, address } = req.body;
-  
-  // Also support reading from custom AgentKit header if sent by standard AgentKit client fetch
+
   let parsedSignature = signature;
   let parsedChallenge = challenge;
   let parsedAddress = address;
 
+  // Also support the AgentKit standard base64 header
   const agentkitHeader = req.headers.agentkit;
   if (agentkitHeader && typeof agentkitHeader === "string") {
     try {
@@ -191,34 +204,39 @@ app.post("/api/copy", async (req, res) => {
     }
   }
 
-  // 1. If unsigned challenge, return 402 challenge
+  // 1. No proof yet — issue a SIWE challenge (402 payment required)
   if (!parsedSignature || !parsedChallenge || !parsedAddress) {
     const nonce = "nonce_" + Math.random().toString(36).substring(2, 15);
     activeNonces.add(nonce);
-    
-    const issuedAt = new Date().toISOString();
-    const challengeBody = {
-      domain: "vouch.copytrade",
-      statement: "Prove you are a human-backed agent on Vouch Copy-Trading.",
-      uri: `http://localhost:${process.env.PORT || 5001}/api/copy`,
-      version: "1",
-      chainId: 84532, // Base Sepolia
-      nonce,
-      issuedAt
-    };
+    // Auto-expire nonces after 5 minutes to avoid unbounded growth
+    setTimeout(() => activeNonces.delete(nonce), 5 * 60_000);
 
     return res.status(402).json({
       status: "payment_required",
       message: "World ID AgentKit human proof required.",
-      challenge: challengeBody
+      challenge: {
+        domain: "vouch.copytrade",
+        statement: "Prove you are a human-backed agent on Vouch Copy-Trading.",
+        uri: `http://localhost:${process.env.PORT || 5001}/api/copy`,
+        version: "1",
+        chainId: 84532, // Base Sepolia
+        nonce,
+        issuedAt: new Date().toISOString()
+      }
     });
   }
 
-  // 2. Reconstruct the CAIP-122 SIWE message
+  // 2. Validate nonce was one we actually issued (replay protection)
+  if (parsedChallenge.nonce && !activeNonces.has(parsedChallenge.nonce)) {
+    return res.status(401).json({ error: "Challenge nonce not recognised or already used." });
+  }
+  // Consume the nonce (one-time use)
+  activeNonces.delete(parsedChallenge.nonce);
+
+  // 3. Reconstruct and verify the SIWE message
   const c = parsedChallenge;
   const message = `${c.domain} wants you to sign in with your Ethereum account:\n${parsedAddress}\n\n${c.statement}\n\nURI: ${c.uri}\nVersion: ${c.version}\nChain ID: ${c.chainId}\nNonce: ${c.nonce}\nIssued At: ${c.issuedAt}`;
 
-  // 3. Verify signature
   const isValidSig = await verifySignature(parsedAddress, message, parsedSignature);
   if (!isValidSig) {
     return res.status(401).json({ error: "Invalid cryptographic signature for challenge." });
@@ -230,7 +248,7 @@ app.post("/api/copy", async (req, res) => {
     return res.status(403).json({ error: "Agent wallet address not registered in AgentBook" });
   }
 
-  // 5. Track humanId usage
+  // 5. Track humanId usage (3 free + any purchased)
   const limit = 3;
   const endpoint = "/api/copy";
   const granted = await tryIncrementHumanUsage(endpoint, humanId, limit);
@@ -238,38 +256,32 @@ app.post("/api/copy", async (req, res) => {
 
   if (!granted) {
     return res.status(402).json({
-      error: `Free copy-trade limit exhausted for human ${humanId} (Limit: ${limit}).`,
+      error: `Free copy-trade limit exhausted for human ${humanId} (Limit: ${limit} + purchased).`,
       limitExceeded: true,
       humanId,
       usage: currentUsage
     });
   }
 
-  // 6. Execute the swap
+  // 6. Execute the on-chain marker transaction on Base Sepolia
   try {
     const wallet = await getOrCreateWallet(userId);
     const copyTxHash = await executeCopyOnBaseSepolia(userId, wallet, swap);
-    
-    res.json({
-      success: true,
-      copyTxHash,
-      humanId,
-      usage: currentUsage,
-      limit
-    });
+
+    res.json({ success: true, copyTxHash, humanId, usage: currentUsage, limit });
   } catch (err: any) {
     res.status(500).json({ error: `Copy execution failed: ${err.message}` });
   }
 });
 
-// 10. Verify Human / Reset Trial Limit (World ID Interaction)
+// 10. Verify Human / Reset Trial Limit (World ID)
 app.post("/api/verify-human", async (req, res) => {
   const { userId, humanId } = req.body;
   if (!userId || !humanId) {
     return res.status(400).json({ error: "userId and humanId are required" });
   }
   try {
-    console.log(`[World ID] Refilling/resetting trial limit for user ${userId} with humanId ${humanId}`);
+    console.log(`[World ID] Resetting trial limit for user ${userId} with humanId ${humanId}`);
     await resetHumanUsage("/api/copy", humanId);
     res.json({ success: true, humanId });
   } catch (err: any) {
@@ -277,14 +289,14 @@ app.post("/api/verify-human", async (req, res) => {
   }
 });
 
-// 11. Purchase Extra Copy-Trades via Worldcoin (WLD) Simulation
+// 11. Purchase Extra Copy-Trades via Worldcoin (WLD)
 app.post("/api/purchase-trades", async (req, res) => {
   const { userId, humanId, amount } = req.body;
   if (!userId || !humanId || !amount || amount <= 0) {
     return res.status(400).json({ error: "userId, humanId, and positive amount are required" });
   }
   try {
-    console.log(`[WLD Purchase] User ${userId} purchasing ${amount} extra copy-trades with humanId ${humanId}`);
+    console.log(`[WLD Purchase] User ${userId} purchasing ${amount} extra copy-trades`);
     const newPurchased = await purchaseExtraTrades("/api/copy", humanId, Number(amount));
     res.json({ success: true, humanId, purchased: newPurchased });
   } catch (err: any) {
@@ -297,14 +309,14 @@ const publicPath = path.resolve(process.cwd(), "dist/public");
 app.use(express.static(publicPath));
 
 // Fallback to index.html for React Router compatibility
-app.get("*splat", (req, res) => {
+app.get("*splat", (_req, res) => {
   res.sendFile(path.resolve(publicPath, "index.html"));
 });
 
 // Bootstrap server
 const PORT = process.env.PORT || 5001;
 
-// Run database schema push on startup
+// Run drizzle schema push only in non-production (Heroku postbuild handles it in prod)
 if (process.env.NODE_ENV !== "production") {
   try {
     console.log("Synchronizing database schema via Drizzle Kit...");
@@ -316,12 +328,10 @@ if (process.env.NODE_ENV !== "production") {
     console.error("Database schema push failed:", err);
   }
 } else {
-  console.log("Production environment: skipping schema push on startup.");
+  console.log("Production: skipping schema push on startup (handled by heroku-postbuild).");
 }
 
 app.listen(PORT, () => {
   console.log(`Vouch backend listening on port ${PORT}`);
-  
-  // Start Etherscan detection loop
   startDetectionLoop(15000);
 });

@@ -25,6 +25,8 @@
     "drizzle-orm": "^0.45.2",
     "ethers": "^6.16.0",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
     "viem": "^2.52.2"
   },
   "devDependencies": {
@@ -38,6 +40,7 @@
     "@solana/kit": "^6.9.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/express-rate-limit": "^6.0.2",
     "@types/node": "^24.12.3",
     "@types/node-fetch": "^2.6.13",
     "@types/react": "^19.2.14",

@@ -161,7 +161,7 @@ async function triggerCopyTrade(swap: DetectedSwap) {
   const followers = await getFollowersOfTrader(swap.trader);
   if (followers.length === 0) return;
 
-  const serverPort = process.env.PORT || "3000";
+  const serverPort = process.env.PORT || "5001";
   const copyUrl = `http://localhost:${serverPort}/api/copy`;
 
   for (const follower of followers) {

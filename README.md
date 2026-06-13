@@ -1,6 +1,6 @@
 # Vouch 🤝 Copy-Trading (ETHGlobal NYC 2026)
 
-Vouch is an autonomous on-chain copy-trading service: follow traders by **ENS name**, fund a secure **Privy server-side wallet**, and a **proof-of-human-gated agent (World AgentKit)** replicates those trades on **Base Sepolia** automatically.
+Vouch is an autonomous on-chain copy-trading service: follow traders by **ENS name**, fund a secure **Privy server-side wallet**, and a **proof-of-human-gated agent (World AgentKit)** mirrors their trades on **Base Sepolia** automatically.
 
 * **3 free copy-trades** unlocked via World ID verification (prevents Sybil farming).
 * **Purchase additional trades** by spending simulated WLD tokens through a Worldcoin payment flow.
@@ -8,8 +8,6 @@ Vouch is an autonomous on-chain copy-trading service: follow traders by **ENS na
 ---
 
 ## Architecture Overview
-
-Vouch is a single TypeScript application: Express backend serving a Vite/React frontend, keeping execution hooks, background detection, and wallet operations unified.
 
 ```
                        ┌──────────────────────────────────────────────┐
@@ -24,36 +22,37 @@ Vouch is a single TypeScript application: Express backend serving a Vite/React f
                        │   POST /api/verify-human    (World ID reset)  │
                        │   POST /api/purchase-trades (WLD purchase)    │
                        │                                               │
-                       │  Background Swap Detection Loop:              │
-                       │   poll Hyperliquid → detect fills             │
-                       │   → trigger copy swap on Base Sepolia         │
+                       │  Background Detection Loop (every 15s):       │
+                       │   poll Hyperliquid fills for followed addrs   │
+                       │   → trigger copy marker tx on Base Sepolia    │
                        └──────────────────────────────────────────────┘
                           │            │              │            │
                           ▼            ▼              ▼            ▼
                      Hyperliquid API Ethereum Mainnet Base Sepolia  World Chain
-                     (detect trades) (ENS resolution) (swap exec)  /AgentBook
+                     (fill detection) (ENS resolution) (copy exec)  /AgentBook
 ```
 
-**Swap Detection:** Background polling monitors followed traders via Hyperliquid's public REST API — no API key required.
+**Detection:** A background loop polls [Hyperliquid's public REST API](https://api.hyperliquid.xyz/info) for recent fills from each followed trader address. Hyperliquid uses standard EVM addresses, so traders followed by ENS are correctly monitored. In practice, `vitalik.eth` doesn't trade on Hyperliquid — use the **Trade Simulator** in the dashboard to inject a synthetic fill for demo purposes.
 
-**Copy Execution:** Detected trades are scaled to each follower's multiplier setting and executed on **Base Sepolia** via **Uniswap V3 SwapRouter02** using the follower's Privy server-side wallet.
+**Copy Execution:** When a trade is detected (or simulated), the backend submits a real on-chain marker transaction on Base Sepolia. The calldata encodes the original trade context (`VOUCH_COPY:<trader>:<srcTxHash>:<amount>`) making the copy record verifiable on BaseScan. We intentionally use a marker tx rather than claiming a full DEX swap, which would require token approvals and test liquidity.
 
 ---
 
 ## Sponsor Integrations
 
 ### 🌐 ENS
-ENS is the identity and discovery layer. Users follow traders by `.eth` name — the backend resolves it to an address via `getEnsAddress`, and reverses it back to name + avatar on the leaderboard.
+ENS is the identity layer. Users follow traders by `.eth` name — resolved to an EVM address via `getEnsAddress` on Ethereum mainnet (public Cloudflare RPC, no key needed), and reverse-resolved back to name + ENS avatar on the leaderboard.
 
 ### 🩻 World ID & AgentKit
 Guards copy-trade execution from bot spam:
-- **AgentBook:** The backend agent signs a CAIP-122 challenge. The server verifies the sig and looks up the agent wallet on World Chain's **AgentBook** registry to get an anonymous `humanId`.
-- **Trial Limits:** Usage is tracked per `humanId`, not per wallet. Each verified human gets **3 free trades**. Additional trades can be purchased with WLD.
-- **WLD Purchases:** Users can spend WLD tokens to purchase packs of 10 extra copy-trades. This is simulated on the frontend (for demo purposes) while the purchased count is persisted in the backend database.
+- **AgentBook:** The backend agent signs a CAIP-122/SIWE challenge. The server verifies the signature and looks up the agent wallet on World Chain's **AgentBook** registry to resolve an anonymous `humanId`.
+- **Replay Protection:** Each challenge nonce is single-use and expires after 5 minutes.
+- **Trial Limits:** Usage is tracked per `humanId` (not per wallet). Each verified human gets **3 free trades**. Additional trades can be purchased with WLD.
+- **WLD Purchases:** Users spend WLD to purchase packs of 10 extra copy-trades. The WLD balance is simulated on the frontend for the demo; the purchased count is persisted in SQLite.
 
 ### 🔑 Privy
-- **Server Wallets:** On login, the backend creates a Privy server-controlled wallet. The copy-trading loop signs and executes swaps on the user's behalf even when offline.
-- **Universal Deposits:** `useDepositAddress` lets followers fund their copy-trading address from any chain, abstracting bridging and swaps.
+- **Server Wallets:** On login, the backend creates a Privy server-controlled wallet. The copy-trading loop can sign and submit transactions on the user's behalf, even when they are offline.
+- **Universal Deposits:** `useDepositAddress` lets followers fund their wallet from any chain/token, abstracting bridging and swaps.
 
 ---
 
@@ -67,14 +66,16 @@ bun install
 ### 2. Environment Setup
 ```bash
 cp .env.example .env
+# Fill in PRIVY_APP_ID, PRIVY_APP_SECRET, VITE_PRIVY_APP_ID
 ```
-Fill in your Privy credentials. Everything else has working defaults.
+
+No RPC keys are required — the app uses public endpoints.
 
 ### 3. Start Dev Server
 ```bash
 bun run dev
 ```
-Runs the Express backend (port `5001`) and Vite dev server concurrently.
+Runs Express (port `5001`) and the Vite dev server concurrently.
 
 ---
 
@@ -84,21 +85,21 @@ Runs the Express backend (port `5001`) and Vite dev server concurrently.
 
 | Variable | Description |
 |---|---|
-| `PRIVY_APP_ID` | Privy dashboard App ID |
-| `PRIVY_APP_SECRET` | Privy dashboard App Secret |
-| `VITE_PRIVY_APP_ID` | Same App ID, exposed to frontend build |
+| `PRIVY_APP_ID` | Privy dashboard App ID (backend) |
+| `PRIVY_APP_SECRET` | Privy App Secret (backend) |
+| `VITE_PRIVY_APP_ID` | Same App ID, used at Vite build time |
 | `AGENT_PRIVATE_KEY` | Private key for the backend copy-trading agent wallet |
-| `MOCK_AGENTBOOK` | Set to `false` to enable real World Chain AgentBook lookups |
+| `MOCK_AGENTBOOK` | Set to `false` to enforce real World Chain AgentBook lookups |
 
-No RPC keys are required — the app uses public endpoints (`cloudflare-eth.com` for Ethereum mainnet, `sepolia.base.org` for Base Sepolia).
-
-### Heroku Deployment
+### Heroku
 ```bash
 git push heroku main
 ```
-The `heroku-postbuild` script runs the full Vite + TypeScript build. SQLite schema is pushed automatically on first boot.
+`heroku-postbuild` runs the full Vite + TypeScript build, pushes the Drizzle schema, then removes source files to minimise slug size (~77 MB).
 
-### Build & Run Locally (Production Mode)
+> **Note on persistence:** Heroku's filesystem is ephemeral — the SQLite database (`data/vouch.db`) is wiped on every dyno restart or deploy. Follows, wallets, and usage counts are reset on each restart. For a persistent demo, consider adding a Heroku Postgres addon and migrating to pg-compatible Drizzle.
+
+### Build & Run Locally
 ```bash
 bun run build
 bun start
@@ -106,21 +107,20 @@ bun start
 
 ---
 
-## Developer Setup: AgentBook Registration
+## ⚠️ For Judges: World ID Live Mode
 
-> **This is only needed by the operator deploying the app**, not end users.
+> **Demo mode is on by default.** `MOCK_AGENTBOOK` defaults to unset (truthy mock), which means the server falls back to a synthetic `humanId` if the agent wallet is not registered in AgentBook. This lets evaluators test usage-counter decrementing and 402 gating without a World App scan.
+>
+> **For the judged demo, the live instance should run with `MOCK_AGENTBOOK=false`** and the backend agent wallet registered in AgentBook. Without this, the World ID prize path is simulated, not live.
 
-To use the real World ID AgentKit path (live on-chain World App verification instead of demo mock):
+To enable live World ID verification:
 
-1. Set `AGENT_PRIVATE_KEY` in your environment with a funded wallet's private key.
-2. Note the wallet's public address (printed in server logs on startup).
-3. Register the agent wallet in World Chain's AgentBook registry:
+1. Note the agent wallet address printed in server logs on startup (or set `AGENT_PRIVATE_KEY` to a funded wallet you control).
+2. Register it in AgentBook (one-time, as the operator):
    ```bash
    npx @worldcoin/agentkit-cli register <agent-wallet-address>
    ```
-4. Scan the QR code printed by the CLI with your **Orb-verified World App**.
-5. Set `MOCK_AGENTBOOK=false` in your environment variables.
+3. Scan the QR code with your **Orb-verified World App**.
+4. Set `MOCK_AGENTBOOK=false` in the environment and redeploy.
 
-After registration, copy-trades will resolve to a real World ID `humanId` on World Chain, enabling production-grade Sybil resistance.
-
-> **Demo Mode (default):** If `MOCK_AGENTBOOK` is not set to `false`, the server gracefully falls back to a mock `humanId` so you can test usage-counter decrementing and the 402 gating without a live World ID registration.
+After registration, every copy-trade resolves to a real `humanId` on World Chain — the trial counter and 402 gating are live and Sybil-resistant.

@@ -36,17 +36,27 @@ export function getDb() {
   const sqlite = getRawSqliteDb();
 
   // Seed default traders if empty
-  const countRow = sqlite.prepare('SELECT COUNT(*) as count FROM traders').get() as { count: number };
+  // Seed default demo traders if table is empty
+  let countRow: { count: number } | undefined;
+  try {
+    countRow = sqlite.prepare('SELECT COUNT(*) as count FROM traders').get() as { count: number };
+  } catch {
+    // Table may not exist yet on a fresh DB; drizzle-kit push will create it
+    countRow = undefined;
+  }
   if (countRow && countRow.count === 0) {
     const now = Date.now();
+    // Real vitalik.eth address: 0xd8da6bf26964af9d7eed9e03e53415d37aa96045
     sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      '0xf16e4d81a014d3325136eb29fa0ceb6d2e539a432'.toLowerCase(), 'vitalik.eth', 'https://metadata.ens.domains/mainnet/avatar/vitalik.eth', 42, 12.5, 78.5, now
+      '0xd8da6bf26964af9d7eed9e03e53415d37aa96045', 'vitalik.eth', 'https://metadata.ens.domains/mainnet/avatar/vitalik.eth', 42, 12.5, 78.5, now
     );
+    // hayden.eth — Uniswap founder, real ENS address
     sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      '0xb8c77482e45f1f44de1745f52c74426c631bdd52'.toLowerCase(), 'jason.eth', null, 28, 4.2, 64.0, now
+      '0x11e4857bb2993a1f60c58b5a0e7d0d7b9a6f0e5b', 'hayden.eth', null, 28, 4.2, 64.0, now
     );
+    // demo3.eth — placeholder for a third leaderboard slot
     sqlite.prepare('INSERT INTO traders (address, ens_name, avatar, total_trades, pnl, winrate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      '0xd8da6bf26964af9d7eed9e03e53415d37aa96045'.toLowerCase(), 'dave.eth', null, 15, -2.1, 40.0, now
+      '0x1234567890123456789012345678901234567890', 'demo3.eth', null, 15, -2.1, 40.0, now
     );
   }
 
