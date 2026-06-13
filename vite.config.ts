@@ -8,28 +8,12 @@ export default defineConfig({
     outDir: 'dist/public',
     emptyOutDir: true,
     rollupOptions: {
-      external: [
-        /^@solana\//,
-        /^@solana-program\//,
-        '@solana/kit',
-        '@solana-program/system',
-        '@solana/web3.js',
-        '@solana/wallet-adapter-base'
-      ],
       onwarn(warning, defaultWarn) {
         if (warning.code === 'INVALID_ANNOTATION') return
         defaultWarn(warning)
       }
     },
     rolldownOptions: {
-      external: [
-        /^@solana\//,
-        /^@solana-program\//,
-        '@solana/kit',
-        '@solana-program/system',
-        '@solana/web3.js',
-        '@solana/wallet-adapter-base'
-      ],
       onwarn(warning, defaultWarn) {
         if (warning.code === 'INVALID_ANNOTATION') return
         defaultWarn(warning)
@@ -46,4 +30,3 @@ export default defineConfig({
     }
   }
 })
-
