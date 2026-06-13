@@ -271,7 +271,9 @@ const PORT = process.env.PORT || 5001;
 // Run database schema push on startup
 try {
   console.log("Synchronizing database schema via Drizzle Kit...");
-  execSync("npx drizzle-kit push", { stdio: "inherit" });
+  const isBun = typeof (process as any).versions.bun !== "undefined";
+  const cmd = isBun ? "bunx drizzle-kit push" : "npx drizzle-kit push";
+  execSync(cmd, { stdio: "inherit" });
   console.log("Database schema synchronized successfully.");
 } catch (err) {
   console.error("Database schema push failed:", err);

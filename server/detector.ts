@@ -20,7 +20,7 @@ if (!agentPrivateKey || agentPrivateKey.startsWith("mock_")) {
   agentPrivateKey = generatePrivateKey();
   const account = privateKeyToAccount(agentPrivateKey as `0x${string}`);
   console.log(`\x1b[33m%s\x1b[0m`, `=== ACTION REQUIRED: To enable real World ID free copy-trades, register this wallet in AgentBook:`);
-  console.log(`\x1b[36m%s\x1b[0m`, `   npx @worldcoin/agentkit-cli register ${account.address}`);
+  console.log(`\x1b[36m%s\x1b[0m`, `   bunx @worldcoin/agentkit-cli register ${account.address}`);
   console.log("--------------------------------------------------------------------------------");
 }
 

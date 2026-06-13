@@ -790,11 +790,11 @@ export default function App() {
                       <li>Copy your **Copy-Trading Address** from the dashboard banner.</li>
                       <li>In your terminal, run the AgentKit CLI registration command:
                         <div className="bg-black/50 border border-white/5 p-3 rounded-lg font-mono text-purple-400 mt-2 flex justify-between items-center">
-                          <span>npx @worldcoin/agentkit-cli register &lt;your-wallet-address&gt;</span>
+                          <span>bunx @worldcoin/agentkit-cli register &lt;your-wallet-address&gt;</span>
                           <button 
                             onClick={() => {
                               if (copyWallet) {
-                                navigator.clipboard.writeText(`npx @worldcoin/agentkit-cli register ${copyWallet.address}`);
+                                navigator.clipboard.writeText(`bunx @worldcoin/agentkit-cli register ${copyWallet.address}`);
                                 alert("CLI command copied to clipboard!");
                               } else {
                                 alert("Please connect your wallet first!");

@@ -89,7 +89,7 @@ To test the real World ID AgentKit path (with World App verification):
 1. Log in to Vouch and copy your **Copy-Trading Address** from the dashboard.
 2. In your terminal, run the AgentKit CLI registration utility:
    ```bash
-   npx @worldcoin/agentkit-cli register <your-wallet-address>
+   bunx @worldcoin/agentkit-cli register <your-wallet-address>
    ```
 3. Open the World App on your phone and scan the printed QR code. This will submit a gasless transaction to the AgentBook smart contract on World Chain, linking your wallet to your World ID.
 4. Subsequent trades triggered on Vouch will now successfully resolve to your real World ID `humanId`!
