@@ -11,6 +11,7 @@
     "start": "node dist/server/index.js",
     "lint": "eslint .",
     "preview": "vite preview",
+    "clean": "rm -rf dist",
     "heroku-postbuild": "tsc && vite build && tsc -p server/tsconfig.json"
   },
   "dependencies": {

@@ -16,6 +16,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Log all incoming requests for debugging
+app.use((req, res, next) => {
+  console.log(`[HTTP] ${req.method} ${req.url} - query:`, req.query, "body:", req.body);
+  next();
+});
+
 // In-memory nonce store for AgentKit challenges
 const activeNonces = new Set<string>();
 

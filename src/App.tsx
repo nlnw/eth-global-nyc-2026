@@ -1,5 +1,78 @@
 import { useState, useEffect, useCallback } from 'react';
-import { usePrivy, useDepositAddress } from '@privy-io/react-auth';
+import { usePrivy as useRealPrivy, useDepositAddress as useRealDepositAddress } from '@privy-io/react-auth';
+
+function usePrivy() {
+  const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
+  
+  if (!isMock) {
+    try {
+      return useRealPrivy();
+    } catch (e) {
+      console.warn("Real Privy failed to initialize, falling back to mock:", e);
+    }
+  }
+
+  // Mock implementation
+  const [authenticated, setAuthenticated] = useState(() => {
+    return localStorage.getItem('mock_auth') === 'true';
+  });
+  
+  const [mockAddress] = useState(() => {
+    let addr = localStorage.getItem('mock_address');
+    if (!addr) {
+      addr = '0xdb77' + Math.random().toString(16).substring(2, 12) + '0000' + Math.random().toString(16).substring(2, 12);
+      localStorage.setItem('mock_address', addr);
+    }
+    return addr;
+  });
+
+  const login = () => {
+    localStorage.setItem('mock_auth', 'true');
+    setAuthenticated(true);
+  };
+
+  const logout = () => {
+    localStorage.setItem('mock_auth', 'false');
+    setAuthenticated(false);
+  };
+
+  return {
+    ready: true,
+    authenticated,
+    user: authenticated ? {
+      id: `mock_user_${mockAddress.substring(2, 10)}`,
+      wallet: {
+        address: mockAddress
+      }
+    } : null,
+    login,
+    logout
+  };
+}
+
+function useDepositAddress() {
+  const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
+
+  if (isMock) {
+    return {
+      createDepositAddress: async (config: any) => {
+        console.log("Mock createDepositAddress config:", config);
+        alert(`[Demo Mode] Simulated Privy Universal Funding Modal opening for address: ${config.destinationAddress} on Base Sepolia.`);
+      }
+    };
+  }
+
+  try {
+    return useRealDepositAddress();
+  } catch (e) {
+    return {
+      createDepositAddress: async (config: any) => {
+        console.log("Mock createDepositAddress config:", config);
+        alert(`[Demo Mode Fallback] Simulated Privy Universal Funding Modal opening for address: ${config.destinationAddress} on Base Sepolia.`);
+      }
+    };
+  }
+}
 import { 
   Shield, 
   Search, 
