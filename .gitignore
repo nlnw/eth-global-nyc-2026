@@ -32,3 +32,7 @@ gcp-service-account.json
 /main
 /bin/
 
+# Local Database
+data/
+*.db
+

@@ -53,7 +53,7 @@ export function startDetectionLoop(intervalMs = 15000) {
   setInterval(async () => {
     try {
       const db = await getDb();
-      const traders = await db.all("SELECT DISTINCT address FROM follows WHERE active = 1");
+      const traders = await db.all("SELECT DISTINCT trader_address AS address FROM follows WHERE active = 1");
       
       for (const trader of traders) {
         await pollTraderSwaps(trader.address);
