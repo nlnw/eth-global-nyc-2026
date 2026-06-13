@@ -6,15 +6,15 @@
   "scripts": {
     "dev": "concurrently --kill-others \"nodemon --watch server --ext ts --exec \\\"bun run server/index.ts\\\"\" \"vite\"",
     "build:server": "tsc -p server/tsconfig.json",
-    "build:frontend": "tsc && vite build",
-    "build": "tsc && vite build && tsc -p server/tsconfig.json",
+    "build:frontend": "tsc -p tsconfig.json && vite build",
+    "build": "tsc -p tsconfig.json && vite build && tsc -p server/tsconfig.json",
     "start": "node dist/server/index.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "deploy": "git push origin main && git push heroku main",
     "push": "bun run deploy",
-    "heroku-postbuild": "tsc && vite build && tsc -p server/tsconfig.json"
+    "heroku-postbuild": "tsc -p tsconfig.json && vite build && tsc -p server/tsconfig.json"
   },
   "dependencies": {
     "@privy-io/node": "^0.21.0",
