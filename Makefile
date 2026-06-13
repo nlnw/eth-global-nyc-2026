@@ -12,9 +12,7 @@ help:
 
 # Install all dependencies
 install:
-	@echo "Installing Go backend dependencies..."
-	go mod tidy
-	@echo "Installing React frontend dependencies using Bun..."
+	@echo "Installing package dependencies using Bun..."
 	bun install
 
 # Start development servers
@@ -24,17 +22,14 @@ dev:
 
 # Build for production
 build:
-	@echo "Building frontend production bundle..."
+	@echo "Building production bundles..."
 	bun run build
-	@echo "Building Go backend binary..."
-	mkdir -p bin
-	go build -o bin/main main.go
-	@echo "Build complete! Production files are located in dist/ and bin/main."
+	@echo "Build complete! Production files are located in dist/."
 
 # Run production build
 run:
 	@echo "Running production server on port 5001..."
-	./bin/main
+	bun start
 
 # Clean build artifacts
 clean:
