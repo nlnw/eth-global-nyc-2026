@@ -1,4 +1,3 @@
-import fetch from "node-fetch";
 import dotenv from "dotenv";
 import { getDb, getFollowersOfTrader, recordTrade } from "./db.js";
 import { createAgentkitClient } from "@worldcoin/agentkit";
