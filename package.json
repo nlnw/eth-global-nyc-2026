@@ -4,21 +4,36 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently --kill-others \"nodemon --watch main.go --ext go --exec \\\"go run main.go\\\"\" \"vite\"",
-    "build": "tsc && vite build",
+    "dev": "concurrently --kill-others \"nodemon --watch server --ext ts --exec \\\"bun run server/index.ts\\\"\" \"vite\"",
+    "build:server": "tsc -p server/tsconfig.json",
+    "build:frontend": "tsc && vite build",
+    "build": "tsc -p server/tsconfig.json && tsc && vite build",
+    "start": "node dist/server/index.js",
     "lint": "eslint .",
     "preview": "vite preview",
-    "heroku-postbuild": "tsc && vite build"
+    "heroku-postbuild": "tsc -p server/tsconfig.json && tsc && vite build"
   },
   "dependencies": {
+    "@privy-io/node": "^0.21.0",
+    "@privy-io/react-auth": "^3.30.0",
+    "@worldcoin/agentkit": "^0.2.0",
     "concurrently": "^10.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "lucide-react": "^1.18.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
+    "viem": "^2.52.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.12.3",
+    "@types/node-fetch": "^2.6.13",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",

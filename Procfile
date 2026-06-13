@@ -1,1 +1,1 @@
-web: eth-global-nyc-2026
+web: node dist/server/index.js
