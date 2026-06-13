@@ -9,6 +9,18 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       external: [
+        /^@solana\//,
+        /^@solana-program\//,
+        '@solana/kit',
+        '@solana-program/system',
+        '@solana/web3.js',
+        '@solana/wallet-adapter-base'
+      ]
+    },
+    rolldownOptions: {
+      external: [
+        /^@solana\//,
+        /^@solana-program\//,
         '@solana/kit',
         '@solana-program/system',
         '@solana/web3.js',
