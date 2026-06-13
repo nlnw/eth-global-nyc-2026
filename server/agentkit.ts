@@ -85,7 +85,10 @@ export async function tryIncrementHumanUsage(
         .get();
         
       const count = row ? (row.count || 0) : 0;
-      if (count >= limit) {
+      const purchased = row ? (row.purchased || 0) : 0;
+      // Dynamic limit: 3 free trials + any WLD-purchased extra trades
+      const effectiveLimit = limit + purchased;
+      if (count >= effectiveLimit) {
         return false;
       }
       
@@ -122,4 +125,54 @@ export async function getHumanUsageCount(endpoint: string, humanId: string): Pro
     console.error("Database error in getHumanUsageCount:", err);
     return 0;
   }
+}
+
+/**
+ * Resets human usage count to 0 (refills free copy-trades)
+ */
+export async function resetHumanUsage(endpoint: string, humanId: string): Promise<void> {
+  const db = getDb();
+  await db.insert(agentkitUsage)
+    .values({
+      endpoint,
+      humanId,
+      count: 0
+    })
+    .onConflictDoUpdate({
+      target: [agentkitUsage.endpoint, agentkitUsage.humanId],
+      set: { count: 0 }
+    })
+    .run();
+}
+
+/**
+ * Adds extra purchased copy-trades for a humanId (paid via WLD simulation)
+ * Returns the new total purchased count.
+ */
+export async function purchaseExtraTrades(
+  endpoint: string,
+  humanId: string,
+  amount: number
+): Promise<number> {
+  const db = getDb();
+  return db.transaction((tx) => {
+    const row = tx.select()
+      .from(agentkitUsage)
+      .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
+      .get();
+    const currentPurchased = row ? (row.purchased || 0) : 0;
+    const newPurchased = currentPurchased + amount;
+    
+    if (row) {
+      tx.update(agentkitUsage)
+        .set({ purchased: newPurchased })
+        .where(and(eq(agentkitUsage.endpoint, endpoint), eq(agentkitUsage.humanId, humanId)))
+        .run();
+    } else {
+      tx.insert(agentkitUsage)
+        .values({ endpoint, humanId, count: 0, purchased: newPurchased })
+        .run();
+    }
+    return newPurchased;
+  });
 }

@@ -46,6 +46,7 @@ export const agentkitUsage = sqliteTable('agentkit_usage', {
   endpoint: text('endpoint').notNull(),
   humanId: text('human_id').notNull(),
   count: integer('count').default(0),
+  purchased: integer('purchased').default(0), // extra trades purchased via WLD
 }, (table) => ({
   pk: primaryKey({ columns: [table.endpoint, table.humanId] }),
 }));

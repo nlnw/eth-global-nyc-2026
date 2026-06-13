@@ -12,7 +12,6 @@ function usePrivy() {
     }
   }
 
-  // Mock implementation
   const [authenticated, setAuthenticated] = useState(() => {
     return localStorage.getItem('mock_auth') === 'true';
   });
@@ -41,9 +40,7 @@ function usePrivy() {
     authenticated,
     user: authenticated ? {
       id: `mock_user_${mockAddress.substring(2, 10)}`,
-      wallet: {
-        address: mockAddress
-      }
+      wallet: { address: mockAddress }
     } : null,
     login,
     logout
@@ -73,23 +70,24 @@ function useDepositAddress() {
     };
   }
 }
-import { 
-  Shield, 
-  Search, 
-  Activity, 
-  Copy, 
-  ExternalLink, 
-  Plus, 
-  Trash2, 
-  Wallet, 
-  Play, 
-  Users, 
+
+import {
+  Shield,
+  Search,
+  Activity,
+  ExternalLink,
+  Plus,
+  Trash2,
+  Wallet,
+  Play,
+  Users,
   Award,
   TrendingUp,
   Sparkles,
   Check,
   LogOut,
-  HelpCircle
+  Globe,
+  Zap,
 } from 'lucide-react';
 
 interface Trader {
@@ -125,34 +123,98 @@ interface CopyWallet {
   balance: string;
 }
 
-interface BackendStatus {
-  status: string;
-  database: string;
-  privy: string;
-  agentbook: string;
-}
-
 export default function App() {
   const { login, logout, authenticated, user, ready } = usePrivy();
   const { createDepositAddress } = useDepositAddress();
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'trades' | 'about'>('dashboard');
-  const [status, setStatus] = useState<BackendStatus | null>(null);
-  
-  // Wallet & User states
+  // World ID state
+  const [verifiedHumanId, setVerifiedHumanId] = useState<string | null>(() => localStorage.getItem('worldid_human_id'));
+  const [showWorldIdModal, setShowWorldIdModal] = useState(false);
+  const [verifyingWorldId, setVerifyingWorldId] = useState(false);
+
+  // WLD purchase state
+  const [wldBalance, setWldBalance] = useState<number>(() => {
+    const stored = localStorage.getItem('wld_balance');
+    return stored ? Number(stored) : 5.0;
+  });
+  const [purchasedTrades, setPurchasedTrades] = useState<number>(0);
+  const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [purchasingTrades, setPurchasingTrades] = useState(false);
+  const [purchaseAmount] = useState(10); // Trades per purchase
+  const wldCostPerPurchase = 1.0;
+
+  const handleVerifyWorldId = async () => {
+    if (!user) return;
+    setVerifyingWorldId(true);
+    setTimeout(async () => {
+      const simulatedId = `phone_proof_hl_${Math.random().toString(36).substring(2, 8)}`;
+      try {
+        const res = await fetch('/api/verify-human', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id, humanId: simulatedId })
+        });
+        if (res.ok) {
+          localStorage.setItem('worldid_human_id', simulatedId);
+          setVerifiedHumanId(simulatedId);
+          setShowWorldIdModal(false);
+        } else {
+          alert("Verification failed on server.");
+        }
+      } catch (err) {
+        console.error("World ID verification error:", err);
+      } finally {
+        setVerifyingWorldId(false);
+      }
+    }, 1500);
+  };
+
+  const handlePurchaseTrades = async () => {
+    if (!user || !verifiedHumanId) {
+      alert("Please verify your World ID first to purchase extra trades.");
+      return;
+    }
+    if (wldBalance < wldCostPerPurchase) {
+      alert("Insufficient WLD balance.");
+      return;
+    }
+    setPurchasingTrades(true);
+    setTimeout(async () => {
+      try {
+        const res = await fetch('/api/purchase-trades', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id, humanId: verifiedHumanId, amount: purchaseAmount })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const newBalance = Math.max(0, wldBalance - wldCostPerPurchase);
+          setWldBalance(newBalance);
+          localStorage.setItem('wld_balance', String(newBalance));
+          setPurchasedTrades(data.purchased || 0);
+          setShowPurchaseModal(false);
+        } else {
+          alert(data.error || "Purchase failed.");
+        }
+      } catch (err) {
+        console.error("Purchase error:", err);
+        alert("Purchase failed.");
+      } finally {
+        setPurchasingTrades(false);
+      }
+    }, 1800);
+  };
+
   const [copyWallet, setCopyWallet] = useState<CopyWallet | null>(null);
   const [loadingWallet, setLoadingWallet] = useState(false);
-  // Lists
   const [traders, setTraders] = useState<Trader[]>([]);
   const [followed, setFollowed] = useState<FollowedTrader[]>([]);
   const [trades, setTrades] = useState<CopiedTrade[]>([]);
 
-  // Forms
   const [ensInput, setEnsInput] = useState('');
   const [multiplierInput, setMultiplierInput] = useState(1.0);
   const [submittingFollow, setSubmittingFollow] = useState(false);
 
-  // Simulation Form
   const [simTrader, setSimTrader] = useState('');
   const [simAmount, setSimAmount] = useState('0.01');
   const simTokenIn = 'ETH';
@@ -160,18 +222,6 @@ export default function App() {
   const [simulating, setSimulating] = useState(false);
   const [simSuccessHash, setSimSuccessHash] = useState<string | null>(null);
 
-  // Fetch status
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/status');
-      const data = await res.json();
-      setStatus(data);
-    } catch (err) {
-      console.error("Failed to fetch backend status:", err);
-    }
-  }, []);
-
-  // Fetch leaderboard traders
   const fetchTraders = useCallback(async () => {
     try {
       const res = await fetch('/api/traders');
@@ -182,7 +232,6 @@ export default function App() {
     }
   }, []);
 
-  // Fetch followed traders for active user
   const fetchFollowed = useCallback(async () => {
     if (!user) return;
     try {
@@ -197,7 +246,6 @@ export default function App() {
     }
   }, [user, simTrader]);
 
-  // Fetch trade history for active user
   const fetchTrades = useCallback(async () => {
     if (!user) return;
     try {
@@ -209,7 +257,6 @@ export default function App() {
     }
   }, [user]);
 
-  // Fetch copy wallet info (including balance)
   const fetchWallet = useCallback(async () => {
     if (!user) return;
     setLoadingWallet(true);
@@ -228,21 +275,15 @@ export default function App() {
     }
   }, [user]);
 
-  // Handle follow submission
   const handleFollow = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !ensInput) return;
-    
     setSubmittingFollow(true);
     try {
       const res = await fetch('/api/follow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          ensName: ensInput,
-          multiplier: multiplierInput
-        })
+        body: JSON.stringify({ userId: user.id, ensName: ensInput, multiplier: multiplierInput })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -260,19 +301,14 @@ export default function App() {
     }
   };
 
-  // Handle unfollow
   const handleUnfollow = async (traderAddress: string) => {
     if (!user) return;
     if (!confirm("Are you sure you want to stop copy-trading this address?")) return;
-
     try {
       const res = await fetch('/api/unfollow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          traderAddress
-        })
+        body: JSON.stringify({ userId: user.id, traderAddress })
       });
       if (res.ok) {
         await fetchFollowed();
@@ -283,30 +319,26 @@ export default function App() {
     }
   };
 
-  // Fund copy wallet via Privy universal deposit address
   const handleFundWallet = async () => {
     if (!copyWallet) return;
     try {
       await createDepositAddress({
-        destinationChain: 'eip155:84532', // Base Sepolia
+        destinationChain: 'eip155:84532',
         destinationAddress: copyWallet.address,
         destinationCurrency: '0x0000000000000000000000000000000000000000'
       });
-      // Refresh wallet after modal closes
       setTimeout(fetchWallet, 4000);
     } catch (err) {
       console.error("Deposit flow failed:", err);
     }
   };
 
-  // Simulate swap execution
   const handleSimulateSwap = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!simTrader) {
       alert("Please select or follow a trader first!");
       return;
     }
-
     setSimulating(true);
     setSimSuccessHash(null);
     try {
@@ -318,17 +350,13 @@ export default function App() {
           tokenIn: simTokenIn,
           tokenOut: simTokenOut,
           amountIn: simAmount,
-          amountOut: (Number(simAmount) * 3200).toString() // Mock swap price
+          amountOut: (Number(simAmount) * 3200).toString()
         })
       });
       const data = await res.json();
       if (res.ok) {
         setSimSuccessHash(data.simulatedTxHash);
-        // Refresh trades and wallet balance
-        setTimeout(() => {
-          fetchTrades();
-          fetchWallet();
-        }, 1500);
+        setTimeout(() => { fetchTrades(); fetchWallet(); }, 1500);
       } else {
         alert(data.error || "Simulation failed");
       }
@@ -339,25 +367,16 @@ export default function App() {
     }
   };
 
-  // Bootstrap data loading
   useEffect(() => {
-    fetchStatus();
     fetchTraders();
-  }, [fetchStatus, fetchTraders]);
+  }, [fetchTraders]);
 
-  // Load user-specific data
   useEffect(() => {
     if (authenticated && user) {
       fetchWallet();
       fetchFollowed();
       fetchTrades();
-      
-      // Periodic updates for trades/wallet balance
-      const interval = setInterval(() => {
-        fetchWallet();
-        fetchTrades();
-      }, 10000);
-      
+      const interval = setInterval(() => { fetchWallet(); fetchTrades(); }, 10000);
       return () => clearInterval(interval);
     } else {
       setCopyWallet(null);
@@ -366,16 +385,17 @@ export default function App() {
     }
   }, [authenticated, user, fetchWallet, fetchFollowed, fetchTrades]);
 
-  // Helper to format addresses
   const shortenAddress = (address: string) => {
     if (!address) return '';
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
   };
 
+  const totalCopyLimit = 3 + purchasedTrades;
+
   if (!ready) {
     return (
-      <div className="loading-container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#06040a' }}>
-        <div className="spinner" style={{ border: '3px solid rgba(139, 92, 246, 0.1)', borderTop: '3px solid #8b5cf6', borderRadius: '50%', width: '40px', height: '40px', animation: 'spin 1s linear infinite' }}></div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#06040a' }}>
+        <div className="spinner"></div>
         <div style={{ marginTop: '1.5rem', color: '#9ca3af', fontFamily: 'Outfit', fontWeight: 500 }}>Initializing Vouch Engine...</div>
       </div>
     );
@@ -394,45 +414,20 @@ export default function App() {
             <span className="logo-badge">Copy-Trading</span>
           </div>
 
-          <nav>
-            <button 
-              className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-            >
-              <Activity size={16} />
-              Dashboard
-            </button>
-            <button 
-              className={`nav-tab ${activeTab === 'trades' ? 'active' : ''}`}
-              onClick={() => setActiveTab('trades')}
-            >
-              <Copy size={16} />
-              Trades History
-            </button>
-            <button 
-              className={`nav-tab ${activeTab === 'about' ? 'active' : ''}`}
-              onClick={() => setActiveTab('about')}
-            >
-              <HelpCircle size={16} />
-              AgentBook Setup
-            </button>
-          </nav>
-
-          <div className="flex items-center gap-3">
-            {status && (
-              <div className="connection-status">
-                <div className={`status-indicator ${status.status === 'online' ? 'connected' : 'disconnected'}`}></div>
-                <span>{status.privy === 'configured' ? 'Mainnet RPC' : 'Local Failsafe'}</span>
-              </div>
-            )}
-
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             {authenticated ? (
-              <button onClick={logout} className="filter-btn hover:text-red-400 border border-red-900/30 bg-red-950/10">
-                <LogOut size={14} />
-                Disconnect
-              </button>
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', padding: '0.4rem 0.9rem', borderRadius: '8px', background: 'rgba(6, 4, 10, 0.4)', border: '1px solid rgba(255,255,255,0.08)', color: '#9ca3af' }}>
+                  <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></div>
+                  {user?.wallet?.address ? shortenAddress(user.wallet.address) : 'Connected'}
+                </div>
+                <button onClick={logout} className="btn-ghost" style={{ color: '#f87171', borderColor: 'rgba(127,29,29,0.3)' }}>
+                  <LogOut size={14} />
+                  Disconnect
+                </button>
+              </>
             ) : (
-              <button onClick={login} className="code-btn" style={{ padding: '0.5rem 1.2rem', borderRadius: '8px' }}>
+              <button onClick={login} className="btn-primary">
                 <Wallet size={14} />
                 Connect Wallet
               </button>
@@ -441,398 +436,166 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Container */}
+      {/* Main */}
       <main className="container">
-        
-        {/* Onboarding / Unauthenticated Landing Page */}
+
+        {/* Landing / Unauthenticated */}
         {!authenticated && (
-          <div className="glass-panel text-center max-w-2xl mx-auto my-12 p-12 fade-in" style={{ borderColor: 'rgba(139, 92, 246, 0.2)', boxShadow: '0 20px 50px rgba(139, 92, 246, 0.05)' }}>
-            <div className="mx-auto bg-gradient-to-tr from-purple-600 to-pink-600 w-16 h-16 rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg shadow-purple-500/20">
-              <Sparkles size={28} />
+          <div className="landing-hero fade-in">
+            <div className="hero-glow"></div>
+            <div className="hero-icon">
+              <Sparkles size={32} />
             </div>
-            <h1 className="text-4xl font-extrabold mb-4 tracking-tight" style={{ fontFamily: 'Outfit' }}>
-              Autonomous On-Chain Copy Trading
-            </h1>
-            <p className="text-gray-400 text-md leading-relaxed mb-8 max-w-lg mx-auto">
-              Follow top Ethereum traders by ENS name. Fund your secure Privy wallet, and our proof-of-human-gated AI agents will mirror their swaps on Base Sepolia instantly.
+            <h1 className="hero-title">Autonomous On-Chain<br />Copy Trading</h1>
+            <p className="hero-subtitle">
+              Follow top Ethereum traders by ENS name. Fund your Privy wallet, and our World ID–gated agents mirror their swaps on Base Sepolia.
             </p>
-            
-            <div className="grid grid-cols-3 gap-4 mb-8 text-left max-w-md mx-auto">
-              <div className="p-3 rounded-xl bg-white/5 border border-white/5">
-                <div className="text-purple-400 font-bold mb-1">01. Discovery</div>
-                <div className="text-xs text-gray-500">Track traders easily using their .eth domain identity.</div>
+
+            <div className="feature-grid">
+              <div className="feature-card">
+                <Search size={20} style={{ color: '#c084fc' }} />
+                <div className="feature-card-title">Discover</div>
+                <div className="feature-card-desc">Track elite traders by their <code>.eth</code> identity.</div>
               </div>
-              <div className="p-3 rounded-xl bg-white/5 border border-white/5">
-                <div className="text-purple-400 font-bold mb-1">02. Funding</div>
-                <div className="text-xs text-gray-500">Universal deposit addresses let you fund from any wallet/chain.</div>
+              <div className="feature-card">
+                <Wallet size={20} style={{ color: '#ec4899' }} />
+                <div className="feature-card-title">Fund</div>
+                <div className="feature-card-desc">Universal deposit addresses accept any chain or token.</div>
               </div>
-              <div className="p-3 rounded-xl bg-white/5 border border-white/5">
-                <div className="text-purple-400 font-bold mb-1">03. World ID</div>
-                <div className="text-xs text-gray-500">World AgentKit gates copy execution for fair trial limits.</div>
+              <div className="feature-card">
+                <Globe size={20} style={{ color: '#38bdf8' }} />
+                <div className="feature-card-title">World ID</div>
+                <div className="feature-card-desc">Proof-of-human gates prevent Sybil bot farming.</div>
               </div>
             </div>
 
-            <button onClick={login} className="code-btn shadow-lg shadow-purple-500/10" style={{ padding: '0.8rem 2.2rem', fontSize: '1rem', borderRadius: '12px' }}>
-              <Wallet size={16} />
-              Connect Privy Embedded Wallet
+            <button onClick={login} className="btn-primary btn-lg">
+              <Wallet size={18} />
+              Connect with Privy
             </button>
           </div>
         )}
 
         {/* Authenticated Dashboard */}
         {authenticated && (
-          <div className="fade-in">
+          <div className="dashboard fade-in">
             
-            {/* User Stats Banner */}
-            <div className="stats-grid">
-              <div className="glass-panel stat-card">
-                <div className="stat-header">
-                  <span>Copy-Trading Address</span>
-                  <Wallet size={15} className="text-purple-400" />
-                </div>
-                {loadingWallet && !copyWallet ? (
-                  <div className="stat-value text-lg text-gray-500">Deploying Wallet...</div>
+            {/* Left Column */}
+            <div className="dashboard-left">
+
+              {/* Follow ENS */}
+              <div className="glass-panel section-card">
+                <h2 className="section-title">
+                  <Plus size={17} style={{ color: '#c084fc' }} />
+                  Follow a Trader
+                </h2>
+                <form onSubmit={handleFollow} className="follow-form">
+                  <div style={{ position: 'relative', flex: 1 }}>
+                    <Search size={15} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: '#6b7280' }} />
+                    <input
+                      type="text"
+                      placeholder="vitalik.eth"
+                      className="search-input"
+                      style={{ paddingLeft: '2.4rem' }}
+                      value={ensInput}
+                      onChange={(e) => setEnsInput(e.target.value)}
+                      disabled={submittingFollow}
+                    />
+                  </div>
+                  <div className="multiplier-control">
+                    <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Size</span>
+                    <input
+                      type="number" step="0.1" min="0.1" max="10"
+                      className="multiplier-input"
+                      value={multiplierInput}
+                      onChange={(e) => setMultiplierInput(Number(e.target.value))}
+                      disabled={submittingFollow}
+                    />
+                    <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>×</span>
+                  </div>
+                  <button type="submit" className="btn-primary" disabled={submittingFollow}>
+                    {submittingFollow ? 'Resolving...' : 'Follow'}
+                  </button>
+                </form>
+              </div>
+
+              {/* Followed Traders */}
+              <div className="glass-panel section-card">
+                <h2 className="section-title">
+                  <Users size={17} style={{ color: '#c084fc' }} />
+                  Your Followed Traders
+                  <span className="count-badge">{followed.length}</span>
+                </h2>
+                {followed.length === 0 ? (
+                  <div className="empty-state">No traders followed yet. Search above to start copy-trading.</div>
                 ) : (
-                  <>
-                    <div 
-                      className="stat-value text-xl font-mono cursor-pointer hover:text-purple-300"
-                      onClick={() => {
-                        if (copyWallet) {
-                          navigator.clipboard.writeText(copyWallet.address);
-                          alert("Wallet address copied to clipboard!");
-                        }
-                      }}
-                      title="Copy Wallet Address"
-                    >
-                      {copyWallet ? shortenAddress(copyWallet.address) : '...'}
-                    </div>
-                    <div className="stat-footer mt-2">
-                      <span className="text-purple-400 font-semibold font-mono">{copyWallet?.walletId?.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}</span>
-                    </div>
-                  </>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    {followed.map((f) => (
+                      <div key={f.address} className="trader-row">
+                        <img
+                          src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ens_name}`}
+                          alt={f.ens_name}
+                          style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#e5e7eb', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ens_name}</div>
+                          <div style={{ fontSize: '0.75rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>{shortenAddress(f.address)}</div>
+                        </div>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#c084fc', fontFamily: 'var(--font-mono)' }}>{f.multiplier}×</span>
+                        <button onClick={() => handleUnfollow(f.address)} className="btn-danger-icon" title="Unfollow">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
-              <div className="glass-panel stat-card accent">
-                <div className="stat-header">
-                  <span>Wallet Balance (Base Sepolia)</span>
-                  <Activity size={15} className="text-pink-400" />
-                </div>
-                <div className="stat-value text-2xl font-mono">
-                  {copyWallet ? `${Number(copyWallet.balance).toFixed(5)} ETH` : '0.00 ETH'}
-                </div>
-                <div className="stat-footer mt-2 flex gap-2">
-                  <button onClick={handleFundWallet} className="code-btn" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', borderRadius: '6px' }}>
-                    Universal Deposit
-                  </button>
-                  <a href="https://faucets.chain.link/base-sepolia" target="_blank" rel="noopener noreferrer" className="filter-btn" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem', borderRadius: '6px' }}>
-                    Get Faucet ETH
-                  </a>
-                </div>
-              </div>
-
-              <div className="glass-panel stat-card success">
-                <div className="stat-header">
-                  <span>World ID AgentKit Status</span>
-                  <Shield size={15} className="text-emerald-400" />
-                </div>
-                <div className="stat-value text-2xl flex items-center gap-2">
-                  <Check size={22} className="text-emerald-400" />
-                  <span className="text-lg text-gray-200">Human Proof Verified</span>
-                </div>
-                <div className="stat-footer mt-2">
-                  <span className="text-emerald-400 font-medium">First 3 copy-trades free per human ID</span>
-                </div>
-              </div>
-            </div>
-
-            {/* TAB CONTENT: DASHBOARD */}
-            {activeTab === 'dashboard' && (
-              <div className="charts-grid">
-                
-                {/* Left Column: Follow & Leaderboard */}
-                <div className="flex flex-col gap-6">
-                  
-                  {/* Follow ENS Form */}
-                  <div className="glass-panel p-6">
-                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                      <Plus size={18} className="text-purple-400" />
-                      Follow a Trader by ENS
-                    </h3>
-                    <form onSubmit={handleFollow} className="flex gap-3">
-                      <div className="relative flex-1">
-                        <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500" />
-                        <input 
-                          type="text" 
-                          placeholder="e.g. vitalik.eth" 
-                          className="search-input"
-                          style={{ paddingLeft: '2.5rem' }}
-                          value={ensInput}
-                          onChange={(e) => setEnsInput(e.target.value)}
-                          disabled={submittingFollow}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 bg-black/40 border border-white/5 px-3 rounded-xl">
-                        <span className="text-xs text-gray-500">Size:</span>
-                        <input 
-                          type="number" 
-                          step="0.1" 
-                          min="0.1" 
-                          max="10" 
-                          className="w-12 bg-transparent text-white border-none outline-none font-mono"
-                          value={multiplierInput}
-                          onChange={(e) => setMultiplierInput(Number(e.target.value))}
-                          disabled={submittingFollow}
-                        />
-                        <span className="text-xs text-gray-500">x</span>
-                      </div>
-                      <button type="submit" className="code-btn" style={{ padding: '0.65rem 1.5rem', borderRadius: '12px' }} disabled={submittingFollow}>
-                        {submittingFollow ? 'Resolving...' : 'Follow'}
-                      </button>
-                    </form>
-                  </div>
-
-                  {/* Leaderboard */}
-                  <div className="glass-panel p-6">
-                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                      <Award size={18} className="text-yellow-400" />
-                      Global Trader Leaderboard
-                    </h3>
-                    <div className="overflow-x-auto">
-                      <table className="leaderboard-table w-full">
-                        <thead>
-                          <tr className="text-left text-xs text-gray-500 border-b border-white/5">
-                            <th className="pb-3">Trader</th>
-                            <th className="pb-3">Address</th>
-                            <th className="pb-3">Total Swaps</th>
-                            <th className="pb-3">Simulated PnL</th>
-                            <th className="pb-3">Win Rate</th>
-                            <th className="pb-3 text-right">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {traders.map((trader) => {
-                            const isFollowed = followed.some(f => f.address === trader.address);
-                            return (
-                              <tr key={trader.address} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                                <td className="py-4 flex items-center gap-2">
-                                  <img 
-                                    src={trader.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${trader.ens_name}`}
-                                    alt={trader.ens_name} 
-                                    className="w-6 h-6 rounded-full"
-                                  />
-                                  <span className="font-bold text-sm text-gray-200">{trader.ens_name}</span>
-                                </td>
-                                <td className="py-4 font-mono text-xs text-gray-400">{shortenAddress(trader.address)}</td>
-                                <td className="py-4 text-sm font-mono text-gray-300">{trader.total_trades}</td>
-                                <td className={`py-4 text-sm font-mono font-bold ${trader.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                  {trader.pnl >= 0 ? `+${trader.pnl}%` : `${trader.pnl}%`}
-                                </td>
-                                <td className="py-4 text-sm font-mono text-gray-300">{trader.winrate}%</td>
-                                <td className="py-4 text-right">
-                                  {isFollowed ? (
-                                    <span className="text-xs text-emerald-400 font-semibold bg-emerald-950/20 border border-emerald-900/30 px-2 py-1 rounded-md">Following</span>
-                                  ) : (
-                                    <button 
-                                      onClick={() => {
-                                        setEnsInput(trader.ens_name);
-                                      }}
-                                      className="code-btn"
-                                      style={{ padding: '0.3rem 0.75rem', fontSize: '0.75rem', borderRadius: '6px' }}
-                                    >
-                                      Follow
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Column: Followed list & Simulation Tools */}
-                <div className="flex flex-col gap-6">
-                  
-                  {/* Currently Followed */}
-                  <div className="glass-panel p-6">
-                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                      <Users size={18} className="text-purple-400" />
-                      Traders You Follow ({followed.length})
-                    </h3>
-                    {followed.length === 0 ? (
-                      <div className="text-center text-sm text-gray-500 py-12">
-                        You are not copy-trading any traders yet. Follow one using their ENS name above!
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-3">
-                        {followed.map((f) => (
-                          <div key={f.address} className="flex justify-between items-center bg-black/30 border border-white/5 p-4 rounded-xl">
-                            <div className="flex items-center gap-3">
-                              <img 
-                                src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ens_name}`}
-                                alt={f.ens_name} 
-                                className="w-8 h-8 rounded-full"
-                              />
-                              <div>
-                                <span className="font-bold text-gray-200 block text-sm">{f.ens_name}</span>
-                                <span className="text-xs text-gray-500 font-mono">{shortenAddress(f.address)}</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              <div className="text-right">
-                                <span className="text-xs text-gray-500 block">Copy Size</span>
-                                <span className="text-sm font-mono font-bold text-purple-400">{f.multiplier}x</span>
-                              </div>
-                              <button 
-                                onClick={() => handleUnfollow(f.address)} 
-                                className="text-gray-500 hover:text-red-400 p-1 transition-colors"
-                                title="Unfollow trader"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Dev Simulation Tools */}
-                  <div className="glass-panel p-6 bg-purple-950/5 border-purple-900/20">
-                    <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
-                      <Play size={18} className="text-pink-400 animate-pulse" />
-                      Trade Simulator (Demo helper)
-                    </h3>
-                    <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-                      Mainnet traders might not swap while you are evaluating this app. Use this injector to force a swap from `vitalik.eth` or another followed address, which triggers the detection loop, passes it through the World ID AgentKit gate, and replicates the swap on Base Sepolia.
-                    </p>
-
-                    <form onSubmit={handleSimulateSwap} className="flex flex-col gap-3">
-                      <div>
-                        <label className="text-xs text-gray-500 block mb-1">Select followed trader to swap</label>
-                        <select 
-                          className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-gray-300 outline-none"
-                          value={simTrader}
-                          onChange={(e) => setSimTrader(e.target.value)}
-                        >
-                          <option value="">-- Select followed trader --</option>
-                          {followed.map(f => (
-                            <option key={f.address} value={f.address}>{f.ens_name} ({shortenAddress(f.address)})</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2">
-                        <div>
-                          <label className="text-xs text-gray-500 block mb-1">Amount In</label>
-                          <input 
-                            type="text" 
-                            className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-center text-gray-300 outline-none font-mono"
-                            value={simAmount}
-                            onChange={(e) => setSimAmount(e.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs text-gray-500 block mb-1">Token In</label>
-                          <input 
-                            type="text" 
-                            className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-center text-gray-300 outline-none font-mono"
-                            value={simTokenIn}
-                            disabled
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs text-gray-500 block mb-1">Token Out</label>
-                          <input 
-                            type="text" 
-                            className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-sm text-center text-gray-300 outline-none font-mono"
-                            value={simTokenOut}
-                            disabled
-                          />
-                        </div>
-                      </div>
-
-                      <button type="submit" className="code-btn" style={{ padding: '0.6rem', width: '100%', borderRadius: '10px' }} disabled={simulating}>
-                        {simulating ? 'Processing Copy...' : 'Simulate Swap on Mainnet'}
-                      </button>
-
-                      {simSuccessHash && (
-                        <div className="mt-3 p-3 rounded-xl bg-emerald-950/20 border border-emerald-900/30 text-xs text-emerald-400 flex flex-col gap-1">
-                          <span className="font-bold flex items-center gap-1">
-                            <Check size={14} />
-                            Simulation Triggered!
-                          </span>
-                          <span>Copy execution succeeded on Base Sepolia. Check the Trades History tab to view the transaction!</span>
-                        </div>
-                      )}
-                    </form>
-                  </div>
-
-                </div>
-
-              </div>
-            )}
-
-            {/* TAB CONTENT: TRADES HISTORY */}
-            {activeTab === 'trades' && (
-              <div className="glass-panel p-6">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Activity size={18} className="text-purple-400" />
-                  Copied Trades History
-                </h3>
-                {trades.length === 0 ? (
-                  <div className="text-center text-sm text-gray-500 py-16">
-                    No copied trades yet. Simulate a trader swap or follow an active trader to see trades replicated here.
-                  </div>
+              {/* Leaderboard */}
+              <div className="glass-panel section-card">
+                <h2 className="section-title">
+                  <Award size={17} style={{ color: '#facc15' }} />
+                  Global Leaderboard
+                </h2>
+                {traders.length === 0 ? (
+                  <div className="empty-state">No traders in leaderboard yet.</div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="leaderboard-table w-full">
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="leaderboard-table" style={{ width: '100%' }}>
                       <thead>
-                        <tr className="text-left text-xs text-gray-500 border-b border-white/5">
-                          <th className="pb-3">Trader</th>
-                          <th className="pb-3">Action</th>
-                          <th className="pb-3">Base Sepolia Tx</th>
-                          <th className="pb-3">Original Mainnet Tx</th>
-                          <th className="pb-3">Timestamp</th>
+                        <tr style={{ textAlign: 'left', fontSize: '0.75rem', color: '#6b7280', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <th style={{ paddingBottom: '0.75rem' }}>Trader</th>
+                          <th style={{ paddingBottom: '0.75rem' }}>Swaps</th>
+                          <th style={{ paddingBottom: '0.75rem' }}>PnL</th>
+                          <th style={{ paddingBottom: '0.75rem', textAlign: 'right' }}>Action</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {trades.map((trade) => {
-                          const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ens_name || shortenAddress(trade.trader_address);
+                        {traders.map((trader) => {
+                          const isFollowed = followed.some(f => f.address === trader.address);
                           return (
-                            <tr key={trade.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                              <td className="py-4 font-bold text-sm text-gray-200">{traderName}</td>
-                              <td className="py-4">
-                                <span className="text-sm font-mono text-purple-400 font-bold">{trade.amount_in} ETH</span>
-                                <span className="text-xs text-gray-500 mx-2">→</span>
-                                <span className="text-sm font-mono text-emerald-400 font-bold">{trade.amount_out ? `${Number(trade.amount_out).toFixed(2)} USDC` : 'USDC'}</span>
+                            <tr key={trader.address} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                              <td style={{ paddingTop: '0.85rem', paddingBottom: '0.85rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                  <img
+                                    src={trader.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${trader.ens_name}`}
+                                    alt={trader.ens_name}
+                                    style={{ width: '22px', height: '22px', borderRadius: '50%' }}
+                                  />
+                                  <span style={{ fontWeight: 600, fontSize: '0.85rem', color: '#e5e7eb' }}>{trader.ens_name}</span>
+                                </div>
                               </td>
-                              <td className="py-4">
-                                <a 
-                                  href={`https://sepolia.basescan.org/tx/${trade.copy_tx_hash}`} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-purple-400 font-mono hover:text-purple-300 flex items-center gap-1"
-                                >
-                                  {shortenAddress(trade.copy_tx_hash)}
-                                  <ExternalLink size={12} />
-                                </a>
+                              <td style={{ fontSize: '0.85rem', color: '#9ca3af', fontFamily: 'var(--font-mono)' }}>{trader.total_trades}</td>
+                              <td style={{ fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: trader.pnl >= 0 ? '#34d399' : '#f87171' }}>
+                                {trader.pnl >= 0 ? '+' : ''}{trader.pnl}%
                               </td>
-                              <td className="py-4">
-                                <a 
-                                  href={trade.trader_tx_hash.startsWith('0xsimulated') ? '#' : `https://etherscan.io/tx/${trade.trader_tx_hash}`}
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className={`text-xs font-mono flex items-center gap-1 ${trade.trader_tx_hash.startsWith('0xsimulated') ? 'text-gray-500 pointer-events-none' : 'text-gray-400 hover:text-gray-300'}`}
-                                >
-                                  {trade.trader_tx_hash.startsWith('0xsimulated') ? 'Simulated Injection' : shortenAddress(trade.trader_tx_hash)}
-                                  {!trade.trader_tx_hash.startsWith('0xsimulated') && <ExternalLink size={12} />}
-                                </a>
+                              <td style={{ textAlign: 'right' }}>
+                                {isFollowed ? (
+                                  <span className="badge-following">Following</span>
+                                ) : (
+                                  <button onClick={() => setEnsInput(trader.ens_name)} className="btn-sm">Follow</button>
+                                )}
                               </td>
-                              <td className="py-4 text-xs text-gray-500 font-mono">{new Date(trade.timestamp).toLocaleString()}</td>
                             </tr>
                           );
                         })}
@@ -841,63 +604,345 @@ export default function App() {
                   </div>
                 )}
               </div>
-            )}
+            </div>
 
-            {/* TAB CONTENT: ABOUT & SETUP */}
-            {activeTab === 'about' && (
-              <div className="glass-panel p-8 max-w-3xl mx-auto">
-                <h2 className="text-2xl font-bold mb-4 text-gray-100 flex items-center gap-2">
-                  <Shield className="text-purple-400" />
-                  AgentBook Registry & World ID Setup
+            {/* Right Column */}
+            <div className="dashboard-right">
+
+              {/* Wallet Card */}
+              <div className="glass-panel section-card">
+                <h2 className="section-title">
+                  <Wallet size={17} style={{ color: '#ec4899' }} />
+                  Copy-Trading Wallet
                 </h2>
-                <p className="text-sm text-gray-400 leading-relaxed mb-6">
-                  World AgentKit uses the <strong>AgentBook</strong> smart contract registry on World Chain to map AI agent wallets to verified humans anonymously. This proves that an agent is backed by a real human, allowing services like Vouch to grant free trials (first 3 copy-trades free) safely without Sybil attacks.
-                </p>
-
-                <div className="flex flex-col gap-6">
-                  
-                  <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-900/30">
-                    <h3 className="font-bold text-sm text-purple-300 mb-2">How to register your copy-trading agent wallet:</h3>
-                    <ol className="list-decimal list-inside text-xs text-gray-400 flex flex-col gap-2">
-                      <li>Ensure you have the World App installed and are Orb-verified.</li>
-                      <li>Copy your **Copy-Trading Address** from the dashboard banner.</li>
-                      <li>In your terminal, run the AgentKit CLI registration command:
-                        <div className="bg-black/50 border border-white/5 p-3 rounded-lg font-mono text-purple-400 mt-2 flex justify-between items-center">
-                          <span>bunx @worldcoin/agentkit-cli register &lt;your-wallet-address&gt;</span>
-                          <button 
-                            onClick={() => {
-                              if (copyWallet) {
-                                navigator.clipboard.writeText(`bunx @worldcoin/agentkit-cli register ${copyWallet.address}`);
-                                alert("CLI command copied to clipboard!");
-                              } else {
-                                alert("Please connect your wallet first!");
-                              }
-                            }}
-                            className="filter-btn text-xs"
-                            style={{ padding: '0.2rem 0.5rem' }}
-                          >
-                            Copy Command
-                          </button>
-                        </div>
-                      </li>
-                      <li>Scan the printed QR code with your World App to authorize the agent.</li>
-                      <li>Once registered, Vouch will automatically link your agent executions to your World ID humanId for free trial copy-trades!</li>
-                    </ol>
+                <div className="wallet-row">
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>Address (Base Sepolia)</div>
+                    <div
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.9rem', color: '#e5e7eb', cursor: 'pointer' }}
+                      onClick={() => { if (copyWallet) { navigator.clipboard.writeText(copyWallet.address); } }}
+                      title="Click to copy"
+                    >
+                      {loadingWallet && !copyWallet ? <span style={{ color: '#6b7280' }}>Deploying wallet...</span> : (copyWallet ? shortenAddress(copyWallet.address) : '—')}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#c084fc', marginTop: '0.25rem' }}>
+                      {copyWallet?.walletId?.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}
+                    </div>
                   </div>
-
-                  <div className="p-4 rounded-xl bg-black/40 border border-white/5 text-xs text-gray-500 leading-relaxed">
-                    <span className="font-bold text-gray-400 block mb-1">Development / Demo Notice:</span>
-                    For hackathon evaluation convenience, **Vouch runs with Demo Mock Mode enabled by default**. If your wallet is not yet registered in AgentBook, the backend will gracefully fallback to a simulated `humanId` validation so you can inspect and test the free-trial usage counter decrement and x402 payment fallback blocks without needing a live World ID scan.
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>Balance</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.1rem', color: '#f3f4f6' }}>
+                      {copyWallet ? `${Number(copyWallet.balance).toFixed(5)} ETH` : '—'}
+                    </div>
                   </div>
-
+                </div>
+                <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1rem' }}>
+                  <button onClick={handleFundWallet} className="btn-primary" style={{ flex: 1, justifyContent: 'center', fontSize: '0.8rem' }}>
+                    Universal Deposit
+                  </button>
+                  <a href="https://faucets.chain.link/base-sepolia" target="_blank" rel="noopener noreferrer" className="btn-ghost" style={{ flex: 1, justifyContent: 'center', fontSize: '0.8rem', textDecoration: 'none' }}>
+                    Get Faucet ETH
+                  </a>
                 </div>
               </div>
-            )}
+
+              {/* World ID + WLD Hub */}
+              <div className="glass-panel section-card worldid-card">
+                <h2 className="section-title" style={{ marginBottom: '1.25rem' }}>
+                  <Globe size={17} style={{ color: '#38bdf8' }} />
+                  World ID & WLD Hub
+                </h2>
+
+                {/* Verification Status */}
+                <div className="worldid-status-row">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: verifiedHumanId ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.12)', border: `1px solid ${verifiedHumanId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}` }}>
+                      {verifiedHumanId ? <Check size={18} style={{ color: '#34d399' }} /> : <Shield size={18} style={{ color: '#fbbf24' }} />}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: verifiedHumanId ? '#34d399' : '#fbbf24' }}>
+                        {verifiedHumanId ? 'Verified Human' : 'Not Verified'}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>
+                        {verifiedHumanId ? `ID: ${verifiedHumanId.substring(0, 20)}...` : '3 free copy-trades on verification'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowWorldIdModal(true)}
+                    className="btn-sm"
+                    style={{ background: verifiedHumanId ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', borderColor: verifiedHumanId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)', color: verifiedHumanId ? '#34d399' : '#fbbf24' }}
+                  >
+                    {verifiedHumanId ? 'Refill' : 'Verify'}
+                  </button>
+                </div>
+
+                <div className="worldid-divider"></div>
+
+                {/* WLD Balance & Purchase */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'linear-gradient(135deg, #1d4ed8, #0ea5e9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 800, color: 'white' }}>W</div>
+                    <span style={{ fontSize: '0.85rem', color: '#9ca3af' }}>WLD Balance</span>
+                  </div>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1rem', color: '#f3f4f6' }}>{wldBalance.toFixed(2)} WLD</span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                  <div style={{ fontSize: '0.8rem', color: '#9ca3af' }}>
+                    Copy-trade capacity
+                    <span style={{ fontFamily: 'var(--font-mono)', color: '#c084fc', marginLeft: '0.5rem', fontWeight: 700 }}>
+                      {totalCopyLimit} total
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: '#6b7280', marginLeft: '0.3rem' }}>
+                      (3 free + {purchasedTrades} purchased)
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setShowPurchaseModal(true)}
+                  className="btn-worldcoin"
+                  disabled={!verifiedHumanId || wldBalance < wldCostPerPurchase}
+                  title={!verifiedHumanId ? 'Verify World ID first' : ''}
+                >
+                  <Zap size={15} />
+                  Buy {purchaseAmount} Trades — {wldCostPerPurchase} WLD
+                </button>
+                {!verifiedHumanId && (
+                  <div style={{ fontSize: '0.72rem', color: '#6b7280', textAlign: 'center', marginTop: '0.5rem' }}>
+                    Verify your World ID above to unlock purchases
+                  </div>
+                )}
+              </div>
+
+              {/* Simulation Tools */}
+              <div className="glass-panel section-card" style={{ borderColor: 'rgba(126,34,206,0.15)' }}>
+                <h2 className="section-title">
+                  <Play size={17} style={{ color: '#ec4899' }} />
+                  Trade Simulator
+                  <span style={{ fontSize: '0.7rem', color: '#6b7280', marginLeft: '0.5rem', fontWeight: 400 }}>demo helper</span>
+                </h2>
+                <p style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '1rem', lineHeight: 1.5 }}>
+                  Force a swap from any followed trader to trigger the detection loop and copy execution on Base Sepolia.
+                </p>
+                <form onSubmit={handleSimulateSwap} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <select
+                    className="search-input"
+                    value={simTrader}
+                    onChange={(e) => setSimTrader(e.target.value)}
+                  >
+                    <option value="">— Select a followed trader —</option>
+                    {followed.map(f => (
+                      <option key={f.address} value={f.address}>{f.ens_name} ({shortenAddress(f.address)})</option>
+                    ))}
+                  </select>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '0.3rem' }}>Amount In</label>
+                      <input type="text" className="search-input" style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }} value={simAmount} onChange={(e) => setSimAmount(e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '0.3rem' }}>Token In</label>
+                      <input type="text" className="search-input" style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }} value={simTokenIn} disabled />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '0.3rem' }}>Token Out</label>
+                      <input type="text" className="search-input" style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }} value={simTokenOut} disabled />
+                    </div>
+                  </div>
+
+                  <button type="submit" className="btn-primary" style={{ justifyContent: 'center' }} disabled={simulating}>
+                    {simulating ? 'Processing...' : 'Simulate Swap & Copy'}
+                  </button>
+
+                  {simSuccessHash && (
+                    <div className="success-banner">
+                      <Check size={14} />
+                      <div>
+                        <div style={{ fontWeight: 700 }}>Copy triggered!</div>
+                        <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>Check the trades list below for the Base Sepolia tx.</div>
+                      </div>
+                    </div>
+                  )}
+                </form>
+              </div>
+
+              {/* Copied Trades History */}
+              <div className="glass-panel section-card">
+                <h2 className="section-title">
+                  <Activity size={17} style={{ color: '#c084fc' }} />
+                  Copied Trades
+                  <span className="count-badge">{trades.length}</span>
+                </h2>
+                {trades.length === 0 ? (
+                  <div className="empty-state">No trades yet. Simulate a swap above or wait for a followed trader to execute on Hyperliquid.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="leaderboard-table" style={{ width: '100%' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', fontSize: '0.72rem', color: '#6b7280', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <th style={{ paddingBottom: '0.6rem' }}>Trader</th>
+                          <th style={{ paddingBottom: '0.6rem' }}>Trade</th>
+                          <th style={{ paddingBottom: '0.6rem' }}>Base Sepolia Tx</th>
+                          <th style={{ paddingBottom: '0.6rem' }}>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {trades.slice(0, 10).map((trade) => {
+                          const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ens_name || shortenAddress(trade.trader_address);
+                          return (
+                            <tr key={trade.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                              <td style={{ paddingTop: '0.75rem', paddingBottom: '0.75rem', fontWeight: 600, fontSize: '0.82rem', color: '#e5e7eb' }}>{traderName}</td>
+                              <td style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
+                                <span style={{ color: '#c084fc' }}>{trade.amount_in} ETH</span>
+                                <span style={{ color: '#6b7280', margin: '0 0.3rem' }}>→</span>
+                                <span style={{ color: '#34d399' }}>USDC</span>
+                              </td>
+                              <td>
+                                <a
+                                  href={`https://sepolia.basescan.org/tx/${trade.copy_tx_hash}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ fontSize: '0.78rem', color: '#c084fc', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}
+                                >
+                                  {shortenAddress(trade.copy_tx_hash)}
+                                  <ExternalLink size={11} />
+                                </a>
+                              </td>
+                              <td style={{ fontSize: '0.75rem', color: '#6b7280', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                                {new Date(trade.timestamp).toLocaleTimeString()}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {trades.length > 10 && (
+                      <div style={{ textAlign: 'center', fontSize: '0.78rem', color: '#6b7280', padding: '0.75rem 0 0' }}>
+                        Showing latest 10 of {trades.length} trades
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
 
           </div>
         )}
 
+        {/* Copy credit info when logged in */}
+        {authenticated && (
+          <div style={{ textAlign: 'center', fontSize: '0.75rem', color: '#4b5563', marginTop: '2rem', marginBottom: '1rem' }}>
+            Vouch uses <strong style={{ color: '#6b7280' }}>World AgentBook</strong> to link agents to verified humans · Swaps executed on <strong style={{ color: '#6b7280' }}>Base Sepolia</strong> · Trades detected via <strong style={{ color: '#6b7280' }}>Hyperliquid API</strong>
+          </div>
+        )}
+
       </main>
+
+      {/* World ID Modal */}
+      {showWorldIdModal && (
+        <div className="modal-overlay" onClick={() => !verifyingWorldId && setShowWorldIdModal(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-icon-wrap" style={{ background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.25)' }}>
+              <Shield size={32} style={{ color: '#38bdf8' }} />
+            </div>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 0.4rem' }}>World ID Verification</h2>
+            <p style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: '1.5rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
+              Prove your humanity with World ID. This resets your free trial copy-trades and confirms you're a real person, not a Sybil bot.
+            </p>
+
+            {/* Mock QR Code */}
+            <div className="qr-scanner-box">
+              {verifyingWorldId ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                  <div className="spinner" style={{ borderTopColor: '#38bdf8' }}></div>
+                  <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>Verifying with World App...</span>
+                </div>
+              ) : (
+                <>
+                  <div className="mock-qr">
+                    {Array.from({ length: 25 }).map((_, i) => (
+                      <div key={i} style={{ background: (i % 3 === 0 || i % 4 === 1 || i < 5 || i > 20 || i % 5 === 0 || i % 5 === 4) ? '#06040a' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
+                    ))}
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>Scan with World App</span>
+                </>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
+              <button onClick={() => setShowWorldIdModal(false)} className="btn-ghost" disabled={verifyingWorldId} style={{ flex: 1, justifyContent: 'center' }}>
+                Cancel
+              </button>
+              <button onClick={handleVerifyWorldId} className="btn-worldcoin" disabled={verifyingWorldId} style={{ flex: 1, justifyContent: 'center' }}>
+                {verifyingWorldId ? 'Verifying...' : 'Verify'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WLD Purchase Modal */}
+      {showPurchaseModal && (
+        <div className="modal-overlay" onClick={() => !purchasingTrades && setShowPurchaseModal(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-icon-wrap" style={{ background: 'rgba(29,78,216,0.15)', border: '1px solid rgba(14,165,233,0.3)' }}>
+              <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'linear-gradient(135deg, #1d4ed8, #0ea5e9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', fontWeight: 800, color: 'white' }}>W</div>
+            </div>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 0.4rem' }}>Purchase Copy-Trades</h2>
+            <p style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: '1.25rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
+              Spend <strong style={{ color: '#f3f4f6' }}>1.0 WLD</strong> to unlock <strong style={{ color: '#f3f4f6' }}>10 additional copy-trades</strong> beyond your free trial.
+            </p>
+
+            <div className="purchase-summary">
+              <div className="purchase-row">
+                <span>Copy-trades purchased</span>
+                <span style={{ fontWeight: 700, color: '#c084fc' }}>+{purchaseAmount}</span>
+              </div>
+              <div className="purchase-row">
+                <span>Cost</span>
+                <span style={{ fontWeight: 700, color: '#f3f4f6' }}>{wldCostPerPurchase} WLD</span>
+              </div>
+              <div className="purchase-row" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.6rem', marginTop: '0.25rem' }}>
+                <span>Remaining balance</span>
+                <span style={{ fontWeight: 700, color: wldBalance - wldCostPerPurchase < 0 ? '#f87171' : '#34d399' }}>
+                  {(wldBalance - wldCostPerPurchase).toFixed(2)} WLD
+                </span>
+              </div>
+            </div>
+
+            {/* Purchase QR */}
+            <div className="qr-scanner-box" style={{ borderColor: 'rgba(14,165,233,0.3)' }}>
+              {purchasingTrades ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                  <div className="spinner" style={{ borderTopColor: '#0ea5e9' }}></div>
+                  <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>Confirming in World App...</span>
+                </div>
+              ) : (
+                <>
+                  <div className="mock-qr" style={{ borderColor: '#1d4ed8' }}>
+                    {Array.from({ length: 25 }).map((_, i) => (
+                      <div key={i} style={{ background: (i % 2 === 0 || i % 5 === 1 || i < 5 || i > 18) ? '#06040a' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
+                    ))}
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>Confirm payment in World App</span>
+                </>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
+              <button onClick={() => setShowPurchaseModal(false)} className="btn-ghost" disabled={purchasingTrades} style={{ flex: 1, justifyContent: 'center' }}>
+                Cancel
+              </button>
+              <button onClick={handlePurchaseTrades} disabled={purchasingTrades || wldBalance < wldCostPerPurchase} style={{ flex: 1, justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.2rem', borderRadius: '10px', background: 'linear-gradient(135deg, #1d4ed8, #0ea5e9)', color: 'white', border: 'none', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>
+                {purchasingTrades ? 'Confirming...' : 'Confirm — 1.0 WLD'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

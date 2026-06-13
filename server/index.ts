@@ -7,7 +7,7 @@ import { getDb, addFollow, removeFollow, getFollowedTraders, getTraders, addTrad
 import { resolveName, reverse } from "./ens.js";
 import { getOrCreateWallet } from "./privy.js";
 import { executeCopyOnBaseSepolia, publicClient } from "./execute.js";
-import { verifySignature, getHumanId, tryIncrementHumanUsage, getHumanUsageCount } from "./agentkit.js";
+import { verifySignature, getHumanId, tryIncrementHumanUsage, getHumanUsageCount, resetHumanUsage, purchaseExtraTrades } from "./agentkit.js";
 import { startDetectionLoop, simulateTraderSwap } from "./detector.js";
 
 dotenv.config();
@@ -259,6 +259,36 @@ app.post("/api/copy", async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: `Copy execution failed: ${err.message}` });
+  }
+});
+
+// 10. Verify Human / Reset Trial Limit (World ID Interaction)
+app.post("/api/verify-human", async (req, res) => {
+  const { userId, humanId } = req.body;
+  if (!userId || !humanId) {
+    return res.status(400).json({ error: "userId and humanId are required" });
+  }
+  try {
+    console.log(`[World ID] Refilling/resetting trial limit for user ${userId} with humanId ${humanId}`);
+    await resetHumanUsage("/api/copy", humanId);
+    res.json({ success: true, humanId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 11. Purchase Extra Copy-Trades via Worldcoin (WLD) Simulation
+app.post("/api/purchase-trades", async (req, res) => {
+  const { userId, humanId, amount } = req.body;
+  if (!userId || !humanId || !amount || amount <= 0) {
+    return res.status(400).json({ error: "userId, humanId, and positive amount are required" });
+  }
+  try {
+    console.log(`[WLD Purchase] User ${userId} purchasing ${amount} extra copy-trades with humanId ${humanId}`);
+    const newPurchased = await purchaseExtraTrades("/api/copy", humanId, Number(amount));
+    res.json({ success: true, humanId, purchased: newPurchased });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

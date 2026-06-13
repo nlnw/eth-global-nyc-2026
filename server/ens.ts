@@ -1,10 +1,8 @@
 import { createPublicClient, http } from "viem";
 import { mainnet } from "viem/chains";
-import dotenv from "dotenv";
 
-dotenv.config();
-
-const mainnetRpc = process.env.MAINNET_RPC || "https://cloudflare-eth.com";
+// Public Ethereum mainnet RPC — no API key needed for ENS resolution
+const mainnetRpc = "https://cloudflare-eth.com";
 
 const client = createPublicClient({
   chain: mainnet,

@@ -7,7 +7,8 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const baseSepoliaRpc = process.env.BASE_SEPOLIA_RPC || "https://sepolia.base.org";
+// Public Base Sepolia RPC — no API key needed for testnet execution
+const baseSepoliaRpc = "https://sepolia.base.org";
 
 export const publicClient = createPublicClient({
   chain: baseSepolia,
