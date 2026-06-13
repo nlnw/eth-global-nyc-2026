@@ -507,7 +507,7 @@ export default function App() {
                       {copyWallet ? shortenAddress(copyWallet.address) : '...'}
                     </div>
                     <div className="stat-footer mt-2">
-                      <span className="text-purple-400 font-semibold font-mono">{copyWallet?.walletId.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}</span>
+                      <span className="text-purple-400 font-semibold font-mono">{copyWallet?.walletId?.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}</span>
                     </div>
                   </>
                 )}
