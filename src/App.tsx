@@ -126,6 +126,7 @@ interface CopyWallet {
 export default function App() {
   const { login, logout, authenticated, user, ready } = usePrivy();
   const { createDepositAddress } = useDepositAddress();
+  const userId = user?.id;
 
   // World ID state
   const [verifiedHumanId, setVerifiedHumanId] = useState<string | null>(() => localStorage.getItem('worldid_human_id'));
@@ -144,7 +145,7 @@ export default function App() {
   const wldCostPerPurchase = 1.0;
 
   const handleVerifyWorldId = async () => {
-    if (!user) return;
+    if (!userId) return;
     setVerifyingWorldId(true);
     setTimeout(async () => {
       const simulatedId = `phone_proof_hl_${Math.random().toString(36).substring(2, 8)}`;
@@ -152,7 +153,7 @@ export default function App() {
         const res = await fetch('/api/verify-human', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: user.id, humanId: simulatedId })
+          body: JSON.stringify({ userId, humanId: simulatedId })
         });
         if (res.ok) {
           localStorage.setItem('worldid_human_id', simulatedId);
@@ -170,7 +171,7 @@ export default function App() {
   };
 
   const handlePurchaseTrades = async () => {
-    if (!user || !verifiedHumanId) {
+    if (!userId || !verifiedHumanId) {
       alert("Please verify your World ID first to purchase extra trades.");
       return;
     }
@@ -184,7 +185,7 @@ export default function App() {
         const res = await fetch('/api/purchase-trades', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: user.id, humanId: verifiedHumanId, amount: purchaseAmount })
+          body: JSON.stringify({ userId, humanId: verifiedHumanId, amount: purchaseAmount })
         });
         const data = await res.json();
         if (res.ok) {
@@ -233,9 +234,9 @@ export default function App() {
   }, []);
 
   const fetchFollowed = useCallback(async () => {
-    if (!user) return;
+    if (!userId) return;
     try {
-      const res = await fetch(`/api/followed?userId=${encodeURIComponent(user.id)}`);
+      const res = await fetch(`/api/followed?userId=${encodeURIComponent(userId)}`);
       const data = await res.json();
       setFollowed(data);
       if (data.length > 0 && !simTrader) {
@@ -244,27 +245,27 @@ export default function App() {
     } catch (err) {
       console.error("Failed to fetch followed traders:", err);
     }
-  }, [user, simTrader]);
+  }, [userId, simTrader]);
 
   const fetchTrades = useCallback(async () => {
-    if (!user) return;
+    if (!userId) return;
     try {
-      const res = await fetch(`/api/trades?userId=${encodeURIComponent(user.id)}`);
+      const res = await fetch(`/api/trades?userId=${encodeURIComponent(userId)}`);
       const data = await res.json();
       setTrades(data);
     } catch (err) {
       console.error("Failed to fetch trade history:", err);
     }
-  }, [user]);
+  }, [userId]);
 
   const fetchWallet = useCallback(async () => {
-    if (!user) return;
+    if (!userId) return;
     setLoadingWallet(true);
     try {
       const res = await fetch('/api/get-wallet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id })
+        body: JSON.stringify({ userId })
       });
       const data = await res.json();
       setCopyWallet(data);
@@ -273,17 +274,17 @@ export default function App() {
     } finally {
       setLoadingWallet(false);
     }
-  }, [user]);
+  }, [userId]);
 
   const handleFollow = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !ensInput) return;
+    if (!userId || !ensInput) return;
     setSubmittingFollow(true);
     try {
       const res = await fetch('/api/follow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, ensName: ensInput, multiplier: multiplierInput })
+        body: JSON.stringify({ userId, ensName: ensInput, multiplier: multiplierInput })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -302,13 +303,13 @@ export default function App() {
   };
 
   const handleUnfollow = async (traderAddress: string) => {
-    if (!user) return;
+    if (!userId) return;
     if (!confirm("Are you sure you want to stop copy-trading this address?")) return;
     try {
       const res = await fetch('/api/unfollow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, traderAddress })
+        body: JSON.stringify({ userId, traderAddress })
       });
       if (res.ok) {
         await fetchFollowed();
@@ -372,7 +373,7 @@ export default function App() {
   }, [fetchTraders]);
 
   useEffect(() => {
-    if (authenticated && user) {
+    if (authenticated && userId) {
       fetchWallet();
       fetchFollowed();
       fetchTrades();
@@ -383,7 +384,7 @@ export default function App() {
       setFollowed([]);
       setTrades([]);
     }
-  }, [authenticated, user, fetchWallet, fetchFollowed, fetchTrades]);
+  }, [authenticated, userId, fetchWallet, fetchFollowed, fetchTrades]);
 
   const shortenAddress = (address: string) => {
     if (!address) return '';
