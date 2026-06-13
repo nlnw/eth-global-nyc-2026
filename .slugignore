@@ -1,9 +1,0 @@
-src/
-server/
-tsconfig.json
-vite.config.ts
-drizzle.config.ts
-eslint.config.js
-.env.example
-README.md
-bun.lock
