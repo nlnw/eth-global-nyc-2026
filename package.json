@@ -14,7 +14,7 @@
     "clean": "rm -rf dist",
     "deploy": "git push heroku main",
     "push": "bun run deploy",
-    "heroku-postbuild": "tsc -p tsconfig.json && vite build && tsc -p server/tsconfig.json && npx drizzle-kit push && rm -rf src public server tsconfig.json vite.config.ts eslint.config.js drizzle.config.ts"
+    "heroku-postbuild": "tsc -p tsconfig.json && vite build && tsc -p server/tsconfig.json && mkdir -p data && npx drizzle-kit push && rm -rf src public server tsconfig.json vite.config.ts eslint.config.js drizzle.config.ts"
   },
   "dependencies": {
     "@privy-io/node": "^0.21.0",
