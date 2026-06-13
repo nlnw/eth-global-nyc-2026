@@ -67,30 +67,32 @@ export function startDetectionLoop(intervalMs = 15000) {
   }, intervalMs);
 }
 
-// Poll Etherscan tokentx API for a trader address
+// Poll Hyperliquid userFills API for a trader address
 async function pollTraderSwaps(traderAddress: string) {
-  const apiKey = process.env.ETHERSCAN_API_KEY || "";
-  const url = `https://api.etherscan.io/api?module=account&action=tokentx&address=${traderAddress}&page=1&offset=15&sort=desc${apiKey ? `&apikey=${apiKey}` : ""}`;
-
+  const url = "https://api.hyperliquid.xyz/info";
   try {
-    const res = await fetch(url);
-    const data = await res.json() as any;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "userFills",
+        user: traderAddress
+      })
+    });
     
-    if (data.status !== "1" || !data.result || !Array.isArray(data.result)) {
+    const fills = await res.json() as any;
+    if (!Array.isArray(fills)) {
       return;
     }
 
-    // Group token transfers by txHash
-    const txGroups: { [hash: string]: any[] } = {};
-    for (const tx of data.result) {
-      if (!txGroups[tx.hash]) {
-        txGroups[tx.hash] = [];
-      }
-      txGroups[tx.hash].push(tx);
-    }
-
-    // Identify swaps: we look for transfers out and transfers in within the same tx
-    for (const [txHash, transfers] of Object.entries(txGroups)) {
+    // Process recent fills (Hyperliquid returns them sorted desc by time)
+    const recentFills = fills.slice(0, 10);
+    
+    for (const fill of recentFills) {
+      const txHash = fill.hash || `hl_fill_${fill.tid}`;
+      
       if (processedTxHashes.has(txHash)) continue;
 
       // Check if we've already stored this trade in db
@@ -104,29 +106,29 @@ async function pollTraderSwaps(traderAddress: string) {
         continue;
       }
 
-      // Find token transferred out of the trader's wallet (tokenIn)
-      const outTransfer = transfers.find(t => t.from.toLowerCase() === traderAddress.toLowerCase());
-      // Find token transferred into the trader's wallet (tokenOut)
-      const inTransfer = transfers.find(t => t.to.toLowerCase() === traderAddress.toLowerCase());
+      // Map Hyperliquid trade to EVM swap
+      // Buy -> swap USDC to WETH
+      // Sell -> swap WETH to USDC
+      const isBuy = fill.side === "B";
+      const weth = "0x4200000000000000000000000000000000000006";
+      const usdc = "0x036cbd53842c3326c3b77fd7e7cdbfa97491d388";
+      
+      const swap: DetectedSwap = {
+        trader: traderAddress.toLowerCase(),
+        txHash,
+        tokenIn: isBuy ? usdc : weth,
+        tokenOut: isBuy ? weth : usdc,
+        amountIn: fill.sz,
+        amountOut: (Number(fill.sz) * Number(fill.px)).toString(),
+        timestamp: fill.time
+      };
 
-      if (outTransfer && inTransfer) {
-        const swap: DetectedSwap = {
-          trader: traderAddress,
-          txHash,
-          tokenIn: outTransfer.contractAddress,
-          tokenOut: inTransfer.contractAddress,
-          amountIn: (Number(outTransfer.value) / Math.pow(10, Number(outTransfer.tokenDecimal))).toString(),
-          amountOut: (Number(inTransfer.value) / Math.pow(10, Number(inTransfer.tokenDecimal))).toString(),
-          timestamp: Number(outTransfer.timeStamp) * 1000
-        };
-
-        processedTxHashes.add(txHash);
-        console.log(`Detected live swap from followed trader ${traderAddress}: ${swap.amountIn} ${outTransfer.tokenSymbol} -> ${swap.amountOut} ${inTransfer.tokenSymbol}`);
-        await triggerCopyTrade(swap);
-      }
+      processedTxHashes.add(txHash);
+      console.log(`Detected Hyperliquid trade from followed trader ${traderAddress}: ${fill.side === 'B' ? 'BUY' : 'SELL'} ${fill.sz} ${fill.coin} at ${fill.px} USDC`);
+      await triggerCopyTrade(swap);
     }
   } catch (err) {
-    console.error(`Failed to poll swaps for trader ${traderAddress}:`, err);
+    console.error(`Failed to poll Hyperliquid swaps for trader ${traderAddress}:`, err);
   }
 }
 

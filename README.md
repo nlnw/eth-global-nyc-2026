@@ -23,16 +23,16 @@ Vouch is built as a single TypeScript application (Express backend serving a Vit
                        │   POST /api/copy  ◀── Gated by AgentKit      │
                        │                                              │
                        │  In-process Swap Detection Loop:             │
-                       │   poll followed traders → detect DEX swaps   │
+                       │   poll followed traders → detect trades      │
                        │   → on grant, execute swap on Base Sepolia   │
                        └──────────────────────────────────────────────┘
                           │            │              │            │
                           ▼            ▼              ▼            ▼
-                     Etherscan API  Ethereum Mainnet Base Sepolia  World Chain
-                     (detect swaps) (ENS resolution) (swap exec)   /AgentBook
+                     Hyperliquid API Ethereum Mainnet Base Sepolia  World Chain
+                     (detect trades) (ENS resolution) (swap exec)   /AgentBook
 ```
 
-* **DEX Swap Detection:** A background polling worker monitors followed Ethereum mainnet addresses by parsing transfer logs (using Etherscan `tokentx` API) to detect swaps.
+* **Hyperliquid Trade Detection:** A background polling worker monitors followed trader addresses by fetching their recent fills via Hyperliquid's public API (no API key required).
 * **DEX Copy Execution:** When a swap is detected, the agent scales it to the follower's settings and executes a test swap (WETH -> USDC) on **Base Sepolia** via the **Uniswap V3 SwapRouter02** using the follower's Privy server-side wallet.
 
 ---
