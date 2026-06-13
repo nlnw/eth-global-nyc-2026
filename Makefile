@@ -1,4 +1,4 @@
-.PHONY: help install dev build run clean
+.PHONY: help install dev build run clean deploy
 
 # Default target showing help
 help:
@@ -8,6 +8,7 @@ help:
 	@echo "  make build    - Compile React production bundle and Go backend binary"
 	@echo "  make run      - Run the production binary serving compiled static files"
 	@echo "  make clean    - Remove build artifacts (dist/ and bin/)"
+	@echo "  make deploy   - Push the latest committed changes to Heroku for deployment"
 
 # Install all dependencies
 install:
@@ -40,3 +41,9 @@ clean:
 	@echo "Cleaning build artifacts..."
 	rm -rf dist bin
 	@echo "Clean complete."
+
+# Deploy to Heroku
+deploy:
+	@echo "Deploying latest commit to Heroku..."
+	git push heroku main
+
