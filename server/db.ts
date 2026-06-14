@@ -105,22 +105,19 @@ export async function initSchema() {
 /** Seed demo traders on first boot if the table is empty */
 export async function seedIfEmpty() {
   try {
-    const existing = await db.select().from(traders).limit(1);
-    if (existing.length > 0) return;
-
     const now = Date.now();
     await db.insert(traders).values([
       {
         address: '0xd8da6bf26964af9d7eed9e03e53415d37aa96045',
         ensName: 'vitalik.eth',
-        avatar: 'https://metadata.ens.domains/mainnet/avatar/vitalik.eth',
+        avatar: 'https://euc.li/vitalik.eth',
         totalTrades: 42,
         pnl: 12.5,
         winrate: 78.5,
         createdAt: now,
       },
       {
-        address: '0x11e4857bb2993a1f60c58b5a0e7d0d7b9a6f0e5b',
+        address: '0x50ec05ade8280758e2077fcbc08d878d4aef79c3',
         ensName: 'hayden.eth',
         avatar: null,
         totalTrades: 28,
@@ -129,16 +126,43 @@ export async function seedIfEmpty() {
         createdAt: now,
       },
       {
-        address: '0x1234567890123456789012345678901234567890',
-        ensName: 'demo3.eth',
+        address: '0x5b76f5b8fc9d700624f78208132f91ad4e61a1f0',
+        ensName: 'barmstrong.eth',
+        avatar: 'https://euc.li/barmstrong.eth',
+        totalTrades: 35,
+        pnl: 8.7,
+        winrate: 70.0,
+        createdAt: now,
+      },
+      {
+        address: '0xf0d6999725115e3ead3d927eb3329d63afaec09b',
+        ensName: 'gmoney.eth',
         avatar: null,
-        totalTrades: 15,
-        pnl: -2.1,
-        winrate: 40.0,
+        totalTrades: 19,
+        pnl: 1.4,
+        winrate: 52.0,
+        createdAt: now,
+      },
+      {
+        address: '0x378698d858029f13f9855c42a6f6668e147ed129',
+        ensName: 'dcinvestor.eth',
+        avatar: 'https://www.larvalabs.com/cryptopunks/cryptopunk0294.png?customColor=638596',
+        totalTrades: 50,
+        pnl: 15.2,
+        winrate: 82.0,
+        createdAt: now,
+      },
+      {
+        address: '0xb8c2c29ee19d8307cb7255e1cd9cbDE883a267d5',
+        ensName: 'nick.eth',
+        avatar: 'https://euc.li/nick.eth',
+        totalTrades: 31,
+        pnl: 5.9,
+        winrate: 68.0,
         createdAt: now,
       },
     ]).onConflictDoNothing();
-    console.log('[DB] Seeded demo traders.');
+    console.log('[DB] Seeded/synchronized demo traders.');
   } catch (err) {
     // Silently skip if schema not yet migrated; drizzle-kit push handles creation
     console.warn('[DB] Seed skipped:', (err as Error).message);

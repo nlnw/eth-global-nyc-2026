@@ -164,7 +164,7 @@ interface CopyWallet {
 }
 
 export default function App() {
-  const { login, logout, authenticated, user, ready, sendTransaction } = usePrivy();
+  const { login, logout, authenticated, user, ready } = usePrivy();
   const { createDepositAddress } = useDepositAddress();
   const { wallets } = useWallets();
   const userId = user?.id;
@@ -601,6 +601,31 @@ export default function App() {
                     {submittingFollow ? 'Resolving...' : 'Follow'}
                   </button>
                 </form>
+
+                <div style={{ marginTop: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Suggested ENS Handles</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {[
+                      { name: 'vitalik.eth', desc: 'Founder of Ethereum' },
+                      { name: 'hayden.eth', desc: 'Uniswap Creator' },
+                      { name: 'barmstrong.eth', desc: 'Coinbase CEO' },
+                      { name: 'nick.eth', desc: 'ENS Lead Dev' },
+                      { name: 'dcinvestor.eth', desc: 'DeFi Whales' },
+                      { name: 'gmoney.eth', desc: 'NFT Collector' }
+                    ].map(sug => (
+                      <button
+                        key={sug.name}
+                        type="button"
+                        onClick={() => setEnsInput(sug.name)}
+                        className="btn-ghost"
+                        style={{ padding: '0.25rem 0.6rem', fontSize: '0.72rem', borderRadius: '6px', border: '1px solid var(--panel-border)', background: 'transparent', display: 'inline-flex', alignItems: 'center', gap: '0.2rem', cursor: 'pointer' }}
+                        title={sug.desc}
+                      >
+                        {sug.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               {/* Followed Traders */}
