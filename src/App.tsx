@@ -15,7 +15,6 @@ import {
   Play,
   Users,
   Award,
-  TrendingUp,
   Sparkles,
   Check,
   LogOut,
@@ -454,9 +453,7 @@ export default function App() {
       <header>
         <div className="header-container">
           <div className="logo-section">
-            <div className="logo-icon">
-              <TrendingUp size={22} />
-            </div>
+            <img src="/logo.svg" alt="Vouch Logo" style={{ width: '22px', height: '22px', marginRight: '0.4rem', borderRadius: '6px' }} />
             <span className="logo-text">Vouch</span>
             <span className="logo-badge">Copy-Trading</span>
           </div>

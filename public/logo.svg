@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#863bff" />
+      <stop offset="100%" stop-color="#0ea5e9" />
+    </linearGradient>
+  </defs>
+  <!-- Background rounded rectangle -->
+  <rect x="10" y="10" width="80" height="80" rx="24" fill="url(#logoGrad)" />
+  <!-- Trendline (growth) -->
+  <path d="M28 68 L42 56 L55 61 L70 40" stroke="rgba(255, 255, 255, 0.35)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="70" cy="40" r="4.5" fill="white" />
+  <!-- Trust/checkmark (vouching) -->
+  <path d="M36 50 L46 60 L66 36" stroke="white" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
