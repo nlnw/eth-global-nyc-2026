@@ -359,27 +359,34 @@ export default function App() {
     }
   }, [userId]);
 
-  const handleFollow = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userId || !ensInput) return;
-    setSubmittingFollow(true);
+  const followTraderDirect = async (ensName: string, multiplier = 1.0) => {
+    if (!userId || !ensName) return;
     try {
       const res = await fetch('/api/follow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, ensName: ensInput, multiplier: multiplierInput })
+        body: JSON.stringify({ userId, ensName, multiplier })
       });
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || "Follow failed");
       } else {
-        setEnsInput('');
-        setMultiplierInput(1.0);
         await fetchFollowed();
         await fetchTraders();
       }
     } catch (err) {
-      console.error("Follow error:", err);
+      console.error("Direct follow error:", err);
+    }
+  };
+
+  const handleFollow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId || !ensInput) return;
+    setSubmittingFollow(true);
+    try {
+      await followTraderDirect(ensInput, multiplierInput);
+      setEnsInput('');
+      setMultiplierInput(1.0);
     } finally {
       setSubmittingFollow(false);
     }
@@ -661,7 +668,26 @@ export default function App() {
                             </a>
                           </div>
                         </div>
-                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{f.multiplier}×</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', background: '#f4f4f5', border: '1px solid var(--panel-border)', borderRadius: '6px', padding: '0.1rem 0.35rem' }}>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            max="10"
+                            style={{ width: '40px', border: 'none', background: 'transparent', textAlign: 'center', fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-main)', padding: 0 }}
+                            value={f.multiplier}
+                            onChange={async (e) => {
+                              const val = Number(e.target.value);
+                              if (val >= 0.1 && val <= 10) {
+                                // Update local state for immediate response
+                                setFollowed(prev => prev.map(item => item.address === f.address ? { ...item, multiplier: val } : item));
+                                // Call API to persist new multiplier
+                                await followTraderDirect(f.ensName, val);
+                              }
+                            }}
+                          />
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>×</span>
+                        </div>
                         <button onClick={() => handleUnfollow(f.address)} className="btn-danger-icon" title="Unfollow">
                           <Trash2 size={14} />
                         </button>
@@ -722,7 +748,7 @@ export default function App() {
                                 {isFollowed ? (
                                   <span className="badge-following">Following</span>
                                 ) : (
-                                  <button onClick={() => setEnsInput(trader.ensName)} className="btn-sm">Follow</button>
+                                  <button onClick={() => followTraderDirect(trader.ensName, 1.0)} className="btn-sm">Follow</button>
                                 )}
                               </td>
                             </tr>
