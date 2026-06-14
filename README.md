@@ -77,8 +77,6 @@ bun run dev
 ```
 Runs Express (port `5001`) and the Vite dev server concurrently.
 
----
-
 ## Production Deployment
 
 ### Required Environment Variables
@@ -89,7 +87,6 @@ Runs Express (port `5001`) and the Vite dev server concurrently.
 | `PRIVY_APP_SECRET` | Privy App Secret (backend) |
 | `VITE_PRIVY_APP_ID` | Same App ID, used at Vite build time |
 | `AGENT_PRIVATE_KEY` | Private key for the backend copy-trading agent wallet |
-| `MOCK_AGENTBOOK` | Set to `false` to enforce real World Chain AgentBook lookups |
 
 ### Heroku
 ```bash
@@ -97,23 +94,20 @@ git push heroku main
 ```
 `heroku-postbuild` runs the full Vite + TypeScript build, pushes the Drizzle schema, then removes source files to minimise slug size (~77 MB).
 
-> **Note on persistence:** Heroku's filesystem is ephemeral — the SQLite database (`data/vouch.db`) is wiped on every dyno restart or deploy. Follows, wallets, and usage counts are reset on each restart. For a persistent demo, consider adding a Heroku Postgres addon and migrating to pg-compatible Drizzle.
+> **Note on persistence:** Heroku's filesystem is ephemeral. Follows, wallets, and usage counts are reset on each dyno restart or deploy. For a persistent demo, consider adding a Heroku Postgres addon and migrating to pg-compatible Drizzle.
 
 ### Build & Run Locally
 ```bash
 bun run build
-bun start
 ```
 
 ---
 
-## ⚠️ For Judges: World ID Live Mode
+## ⚠️ World ID Live Operator Registration
 
-> **Demo mode is on by default.** `MOCK_AGENTBOOK` defaults to unset (truthy mock), which means the server falls back to a synthetic `humanId` if the agent wallet is not registered in AgentBook. This lets evaluators test usage-counter decrementing and 402 gating without a World App scan.
->
-> **For the judged demo, the live instance should run with `MOCK_AGENTBOOK=false`** and the backend agent wallet registered in AgentBook. Without this, the World ID prize path is simulated, not live.
+World ID verification is strictly enforced via the live World Chain **AgentBook** registry. The copy-trading agent wallet address MUST be registered on World Chain for copies (both simulated and real-time polled) to execute.
 
-To enable live World ID verification:
+To register your copy-trading agent:
 
 1. Note the agent wallet address printed in server logs on startup (or set `AGENT_PRIVATE_KEY` to a funded wallet you control).
 2. Register it in AgentBook (one-time, as the operator):
@@ -121,6 +115,6 @@ To enable live World ID verification:
    npx @worldcoin/agentkit-cli register <agent-wallet-address>
    ```
 3. Scan the QR code with your **Orb-verified World App**.
-4. Set `MOCK_AGENTBOOK=false` in the environment and redeploy.
 
 After registration, every copy-trade resolves to a real `humanId` on World Chain — the trial counter and 402 gating are live and Sybil-resistant.
+

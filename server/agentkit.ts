@@ -39,20 +39,9 @@ export async function getHumanId(address: string): Promise<string | null> {
     }
 
     console.log(`No AgentBook registration for ${address}.`);
-
-    if (process.env.MOCK_AGENTBOOK !== "false") {
-      const mockId = `mock_human_${address.toLowerCase().substring(0, 10)}`;
-      console.log(`[Demo Mode] Using mock humanId: ${mockId}`);
-      return mockId;
-    }
     return null;
   } catch (err) {
     console.error("AgentBook lookup failed:", err);
-    if (process.env.MOCK_AGENTBOOK !== "false") {
-      const mockId = `mock_human_${address.toLowerCase().substring(0, 10)}`;
-      console.log(`[Demo Mode Fallback] Using mock humanId: ${mockId}`);
-      return mockId;
-    }
     return null;
   }
 }

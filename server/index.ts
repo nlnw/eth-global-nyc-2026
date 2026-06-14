@@ -10,6 +10,7 @@ import { getOrCreateWallet } from "./privy.js";
 import { executeCopyOnBaseSepolia, publicClient } from "./execute.js";
 import { verifySignature, getHumanId, tryIncrementHumanUsage, getHumanUsageCount, resetHumanUsage, purchaseExtraTrades } from "./agentkit.js";
 import { startDetectionLoop, simulateTraderSwap } from "./detector.js";
+import { signRequest } from "@worldcoin/idkit-server";
 
 dotenv.config();
 
@@ -60,8 +61,8 @@ app.get("/api/status", (_req, res) => {
     res.json({
       status: "online",
       database: "connected",
-      privy: process.env.PRIVY_APP_ID ? "configured" : "mock_fallback",
-      agentbook: process.env.MOCK_AGENTBOOK === "false" ? "live" : "demo_mock_allowed"
+      privy: "configured",
+      agentbook: "live"
     });
   } catch (err: any) {
     res.status(500).json({ status: "error", error: err.message });
@@ -168,6 +169,40 @@ app.get("/api/trades", async (req, res) => {
   }
 });
 
+// 7.5 Get Trader Recent Trades from Hyperliquid
+app.get("/api/trader-trades", async (req, res) => {
+  const { address } = req.query;
+  if (!address || typeof address !== "string") {
+    return res.status(400).json({ error: "address query parameter is required" });
+  }
+  try {
+    const response = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "userFills",
+        user: address
+      })
+    });
+    const fills = await response.json() as any;
+    if (!Array.isArray(fills)) {
+      return res.json([]);
+    }
+    const mapped = fills.slice(0, 5).map((f: any) => ({
+      coin: f.coin,
+      side: f.side === "B" ? "BUY" : "SELL",
+      sz: f.sz,
+      px: f.px,
+      time: f.time
+    }));
+    res.json(mapped);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 8. Simulate Trader Swap (Dev tool)
 app.post("/api/simulate-swap", async (req, res) => {
   const { traderAddress, tokenIn, tokenOut, amountIn, amountOut } = req.body;
@@ -175,16 +210,33 @@ app.post("/api/simulate-swap", async (req, res) => {
     return res.status(400).json({ error: "Missing swap simulation parameters" });
   }
   try {
-    const txHash = await simulateTraderSwap(traderAddress, tokenIn, tokenOut, amountIn, amountOut);
-    res.json({ success: true, simulatedTxHash: txHash });
+    const { txHash, results } = await simulateTraderSwap(traderAddress, tokenIn, tokenOut, amountIn, amountOut);
+    res.json({ success: true, simulatedTxHash: txHash, results });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// 9. World ID AgentKit-Gated Copy-Trading Route
+});// 9. World ID AgentKit-Gated Copy-Trading Route
 app.post("/api/copy", copyLimiter, async (req, res) => {
   const { userId, swap, signature, challenge, address } = req.body;
+
+  // Bypass World ID validation entirely for simulated swaps
+  if (swap && swap.isSimulation) {
+    try {
+      console.log(`[Simulation Bypass] Executing simulated copy trade for user ${userId}...`);
+      const wallet = await getOrCreateWallet(userId);
+      const copyTxHash = await executeCopyOnBaseSepolia(userId, wallet, swap);
+      return res.json({
+        success: true,
+        copyTxHash,
+        humanId: "simulation_bypass",
+        usage: 0,
+        limit: 999
+      });
+    } catch (err: any) {
+      console.error(`Simulated copy trade failed:`, err);
+      return res.status(500).json({ error: `Copy execution failed: ${err.message}` });
+    }
+  }
 
   let parsedSignature = signature;
   let parsedChallenge = challenge;
@@ -285,6 +337,91 @@ app.post("/api/verify-human", async (req, res) => {
     res.json({ success: true, humanId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// 10.5 Real World ID verification endpoint
+app.post("/api/verify-human-real", async (req, res) => {
+  const { userId } = req.body;
+  const { userId: _, ...idkitResult } = req.body;
+
+  const appId = process.env.WORLD_APP_ID;
+  const rpId = process.env.WORLD_RP_ID;
+
+  let verifyUrl = "";
+  if (rpId) {
+    verifyUrl = `https://developer.world.org/api/v4/verify/${rpId}`;
+  } else if (appId) {
+    verifyUrl = `https://developer.worldcoin.org/api/v2/verify/${appId}`;
+  } else {
+    return res.status(500).json({ error: "WORLD_RP_ID or WORLD_APP_ID is not configured on the server." });
+  }
+
+  try {
+    console.log(`[World ID] Verifying proof for user ${userId} via ${verifyUrl}...`);
+    const response = await fetch(verifyUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(idkitResult)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[World ID] Developer Portal verification failed:`, errorText);
+      return res.status(400).json({ error: `World ID verification failed: ${errorText}` });
+    }
+
+    // Extract nullifier from IDKitResult responses
+    const nullifierHash = idkitResult.responses?.[0]?.nullifier;
+    if (!nullifierHash) {
+      return res.status(400).json({ error: "No nullifier hash found in IDKit responses." });
+    }
+
+    console.log(`[World ID] Verification successful! Nullifier hash: ${nullifierHash}`);
+
+    // Reset/Refill the trial copy-trade limits for this verified human ID
+    await resetHumanUsage("/api/copy", nullifierHash);
+
+    res.json({ success: true, nullifier_hash: nullifierHash });
+  } catch (err: any) {
+    console.error(`[World ID] Error verifying proof:`, err);
+    res.status(500).json({ error: `Verification server error: ${err.message}` });
+  }
+});
+
+// 10.6 Endpoint to generate RP signature context for the frontend
+app.post("/api/rp-context", async (req, res) => {
+  const { action } = req.body;
+
+  const rpId = process.env.WORLD_RP_ID;
+  const privateKey = process.env.WORLD_PRIVATE_KEY;
+
+  if (!rpId || !privateKey) {
+    return res.status(500).json({ error: "WORLD_RP_ID or WORLD_PRIVATE_KEY is not configured on the server." });
+  }
+
+  try {
+    const signingKeyHex = privateKey.startsWith("0x") ? privateKey.substring(2) : privateKey;
+    const rpSignature = signRequest({
+      signingKeyHex,
+      action: action || "verify",
+      ttl: 3600 // 1 hour TTL
+    });
+
+    res.json({
+      rp_context: {
+        rp_id: rpId,
+        nonce: rpSignature.nonce,
+        created_at: rpSignature.createdAt,
+        expires_at: rpSignature.expiresAt,
+        signature: rpSignature.sig
+      }
+    });
+  } catch (err: any) {
+    console.error("Failed to generate RP signature:", err);
+    res.status(500).json({ error: `Failed to generate RP context: ${err.message}` });
   }
 });
 

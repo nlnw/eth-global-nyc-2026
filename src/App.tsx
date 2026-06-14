@@ -1,115 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { usePrivy as useRealPrivy, useDepositAddress as useRealDepositAddress, useWallets as useRealWallets } from '@privy-io/react-auth';
+import { usePrivy, useDepositAddress, useWallets } from '@privy-io/react-auth';
+import { IDKitRequestWidget, deviceLegacy } from '@worldcoin/idkit';
+import type { IDKitResult } from '@worldcoin/idkit';
 
-function usePrivy() {
-  const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
-  
-  if (!isMock) {
-    try {
-      return useRealPrivy();
-    } catch (e) {
-      console.warn("Real Privy failed to initialize, falling back to mock:", e);
-    }
-  }
-
-  const [authenticated, setAuthenticated] = useState(() => {
-    return localStorage.getItem('mock_auth') === 'true';
-  });
-  
-  const [mockAddress] = useState(() => {
-    let addr = localStorage.getItem('mock_address');
-    if (!addr) {
-      addr = '0xdb77' + Math.random().toString(16).substring(2, 12) + '0000' + Math.random().toString(16).substring(2, 12);
-      localStorage.setItem('mock_address', addr);
-    }
-    return addr;
-  });
-
-  const login = () => {
-    localStorage.setItem('mock_auth', 'true');
-    setAuthenticated(true);
-  };
-
-  const logout = () => {
-    localStorage.setItem('mock_auth', 'false');
-    setAuthenticated(false);
-  };
-
-  const sendTransaction = async (tx: any) => {
-    console.log("Mock sendTransaction:", tx);
-    alert(`[Demo Mode] Simulated sending transaction of ${Number(tx.value) / 1e18} ETH to ${tx.to}`);
-    return { hash: "0xmock_tx_hash_" + Math.random().toString(36).substring(2, 15) };
-  };
-
-  return {
-    ready: true,
-    authenticated,
-    user: authenticated ? {
-      id: `mock_user_${mockAddress.substring(2, 10)}`,
-      wallet: { address: mockAddress }
-    } : null,
-    login,
-    logout,
-    sendTransaction
-  };
-}
-
-function useDepositAddress() {
-  const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
-
-  if (isMock) {
-    return {
-      createDepositAddress: async (config: any) => {
-        console.log("Mock createDepositAddress config:", config);
-        alert(`[Demo Mode] Simulated Privy Universal Funding Modal opening for address: ${config.destinationAddress} on Base Sepolia.`);
-      }
-    };
-  }
-
-  try {
-    return useRealDepositAddress();
-  } catch (e) {
-    return {
-      createDepositAddress: async (config: any) => {
-        console.log("Mock createDepositAddress config:", config);
-        alert(`[Demo Mode Fallback] Simulated Privy Universal Funding Modal opening for address: ${config.destinationAddress} on Base Sepolia.`);
-      }
-    };
-  }
-}
-
-function useWallets() {
-  const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
-
-  if (!isMock) {
-    try {
-      return useRealWallets();
-    } catch (e) {
-      console.warn("Real useWallets failed to initialize, falling back to mock:", e);
-    }
-  }
-
-  const mockAddress = localStorage.getItem('mock_address') || '0xdb77...';
-  return {
-    wallets: [
-      {
-        address: mockAddress,
-        switchChain: async (chainId: number) => {
-          console.log("Mock switchChain to:", chainId);
-        },
-        getEthereumProvider: async () => {
-          return {
-            request: async (args: any) => {
-              console.log("Mock request:", args);
-              alert(`[Demo Mode] Simulated sending transaction of ${Number(args.params[0].value) / 1e18} ETH from your connected wallet.`);
-              return "0xmock_tx_hash_" + Math.random().toString(36).substring(2, 15);
-            }
-          };
-        }
-      }
-    ]
-  };
-}
 
 import {
   Shield,
@@ -146,13 +39,14 @@ interface FollowedTrader extends Trader {
 
 interface CopiedTrade {
   id: string;
-  trader_address: string;
-  trader_tx_hash: string;
-  copy_tx_hash: string;
-  token_in: string;
-  token_out: string;
-  amount_in: string;
-  amount_out: string | null;
+  userId: string;
+  traderAddress: string;
+  traderTxHash: string;
+  copyTxHash: string | null;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: string;
+  amountOut: string | null;
   timestamp: number;
 }
 
@@ -171,8 +65,6 @@ export default function App() {
 
   // World ID state
   const [verifiedHumanId, setVerifiedHumanId] = useState<string | null>(() => localStorage.getItem('worldid_human_id'));
-  const [showWorldIdModal, setShowWorldIdModal] = useState(false);
-  const [verifyingWorldId, setVerifyingWorldId] = useState(false);
 
   // WLD purchase state
   const [wldBalance, setWldBalance] = useState<number>(() => {
@@ -185,30 +77,64 @@ export default function App() {
   const [purchaseAmount] = useState(10); // Trades per purchase
   const wldCostPerPurchase = 1.0;
 
-  const handleVerifyWorldId = async () => {
+  const [activeRpContext, setActiveRpContext] = useState<any | null>(null);
+  const [fetchingRpContext, setFetchingRpContext] = useState(false);
+  const [isVerifierOpen, setIsVerifierOpen] = useState(false);
+
+  const handleVerifyRealWorldId = async (proofResult: IDKitResult) => {
     if (!userId) return;
-    setVerifyingWorldId(true);
-    setTimeout(async () => {
-      const simulatedId = `phone_proof_hl_${Math.random().toString(36).substring(2, 8)}`;
-      try {
-        const res = await fetch('/api/verify-human', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, humanId: simulatedId })
-        });
-        if (res.ok) {
-          localStorage.setItem('worldid_human_id', simulatedId);
-          setVerifiedHumanId(simulatedId);
-          setShowWorldIdModal(false);
-        } else {
-          alert("Verification failed on server.");
-        }
-      } catch (err) {
-        console.error("World ID verification error:", err);
-      } finally {
-        setVerifyingWorldId(false);
+    console.log("[World ID] Proof received from IDKit widget:", proofResult);
+
+    const res = await fetch('/api/verify-human-real', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        ...proofResult
+      })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: "Verification failed on backend" }));
+      throw new Error(data.error || "Verification failed");
+    }
+  };
+
+  const handleVerifySuccess = (result: IDKitResult) => {
+    console.log("[World ID] Verification success:", result);
+    const nullifierHash = (result.responses?.[0] as any)?.nullifier;
+    if (nullifierHash) {
+      localStorage.setItem('worldid_human_id', nullifierHash);
+      setVerifiedHumanId(nullifierHash);
+      fetchWallet();
+    }
+  };
+
+  const triggerVerification = async () => {
+    if (!userId) {
+      alert("Please login first!");
+      return;
+    }
+    setFetchingRpContext(true);
+    try {
+      const res = await fetch('/api/rp-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: import.meta.env.VITE_WORLD_ACTION || 'verify' })
+      });
+      const data = await res.json();
+      if (res.ok && data.rp_context) {
+        setActiveRpContext(data.rp_context);
+        setIsVerifierOpen(true);
+      } else {
+        alert(data.error || "Failed to initiate World ID verification context.");
       }
-    }, 1500);
+    } catch (err) {
+      console.error("Error fetching RP context:", err);
+      alert("Failed to initiate World ID verification.");
+    } finally {
+      setFetchingRpContext(false);
+    }
   };
 
   const handlePurchaseTrades = async () => {
@@ -295,6 +221,30 @@ export default function App() {
   const [followed, setFollowed] = useState<FollowedTrader[]>([]);
   const [trades, setTrades] = useState<CopiedTrade[]>([]);
 
+  const [expandedTrader, setExpandedTrader] = useState<string | null>(null);
+  const [traderTrades, setTraderTrades] = useState<any[]>([]);
+  const [loadingTraderTrades, setLoadingTraderTrades] = useState<string | null>(null);
+
+  const toggleTraderTrades = async (address: string) => {
+    if (expandedTrader === address) {
+      setExpandedTrader(null);
+      setTraderTrades([]);
+      return;
+    }
+    setExpandedTrader(address);
+    setLoadingTraderTrades(address);
+    setTraderTrades([]);
+    try {
+      const res = await fetch(`/api/trader-trades?address=${encodeURIComponent(address)}`);
+      const data = await res.json();
+      setTraderTrades(data);
+    } catch (err) {
+      console.error("Failed to fetch trader trades:", err);
+    } finally {
+      setLoadingTraderTrades(null);
+    }
+  };
+
   const [ensInput, setEnsInput] = useState('');
   const [multiplierInput, setMultiplierInput] = useState(1.0);
   const [submittingFollow, setSubmittingFollow] = useState(false);
@@ -305,6 +255,8 @@ export default function App() {
   const simTokenOut = 'USDC';
   const [simulating, setSimulating] = useState(false);
   const [simSuccessHash, setSimSuccessHash] = useState<string | null>(null);
+  const [simResults, setSimResults] = useState<any[] | null>(null);
+  const [simError, setSimError] = useState<string | null>(null);
 
   const fetchTraders = useCallback(async () => {
     try {
@@ -432,6 +384,8 @@ export default function App() {
     }
     setSimulating(true);
     setSimSuccessHash(null);
+    setSimResults(null);
+    setSimError(null);
     try {
       const res = await fetch('/api/simulate-swap', {
         method: 'POST',
@@ -447,12 +401,14 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         setSimSuccessHash(data.simulatedTxHash);
+        setSimResults(data.results || []);
         setTimeout(() => { fetchTrades(); fetchWallet(); }, 1500);
       } else {
-        alert(data.error || "Simulation failed");
+        setSimError(data.error || "Simulation failed");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Simulation error:", err);
+      setSimError(err.message || "Simulation error");
     } finally {
       setSimulating(false);
     }
@@ -614,11 +570,11 @@ export default function App() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
                     {[
                       { name: 'vitalik.eth', desc: 'Founder of Ethereum' },
-                      { name: 'hayden.eth', desc: 'Uniswap Creator' },
-                      { name: 'barmstrong.eth', desc: 'Coinbase CEO' },
-                      { name: 'nick.eth', desc: 'ENS Lead Dev' },
-                      { name: 'dcinvestor.eth', desc: 'DeFi Whales' },
-                      { name: 'gmoney.eth', desc: 'NFT Collector' }
+                      { name: 'hot.cooperm.eth', desc: 'drkmttr Vault' },
+                      { name: 'bmac.eth', desc: 'Citadel Vault' },
+                      { name: 'theneetguy.eth', desc: 'NEET WORLD ORDER Vault' },
+                      { name: 'guapalterman.eth', desc: 'OIB Vault' },
+                      { name: 'junkai.eth', desc: 'one life Vault' }
                     ].map(sug => (
                       <button
                         key={sug.name}
@@ -647,50 +603,89 @@ export default function App() {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                     {followed.map((f) => (
-                      <div key={f.address} className="trader-row">
-                        <img
-                          src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ensName}`}
-                          alt={f.ensName}
-                          style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--panel-border)' }}
-                        />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ensName}</div>
-                          <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ color: '#6b7280', fontFamily: 'var(--font-mono)' }}>{shortenAddress(f.address)}</span>
-                            <a
-                              href={`https://hyperdash.com/user/${f.address}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}
-                              title="View on Hyperdash"
-                            >
-                              <ExternalLink size={12} />
-                            </a>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', background: '#f4f4f5', border: '1px solid var(--panel-border)', borderRadius: '6px', padding: '0.1rem 0.35rem' }}>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0.1"
-                            max="10"
-                            style={{ width: '40px', border: 'none', background: 'transparent', textAlign: 'center', fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-main)', padding: 0 }}
-                            value={f.multiplier}
-                            onChange={async (e) => {
-                              const val = Number(e.target.value);
-                              if (val >= 0.1 && val <= 10) {
-                                // Update local state for immediate response
-                                setFollowed(prev => prev.map(item => item.address === f.address ? { ...item, multiplier: val } : item));
-                                // Call API to persist new multiplier
-                                await followTraderDirect(f.ensName, val);
-                              }
-                            }}
+                      <div key={f.address} style={{ borderBottom: '1px solid var(--panel-border)', paddingBottom: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div className="trader-row" style={{ border: 'none', padding: 0 }}>
+                          <img
+                            src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ensName}`}
+                            alt={f.ensName}
+                            style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--panel-border)', cursor: 'pointer' }}
+                            onClick={() => toggleTraderTrades(f.address)}
+                            title="Click to view recent trades"
                           />
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>×</span>
+                          <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => toggleTraderTrades(f.address)} title="Click to view recent trades">
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ensName}</div>
+                            <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span style={{ color: '#6b7280', fontFamily: 'var(--font-mono)' }}>{shortenAddress(f.address)}</span>
+                              <a
+                                href={`https://hyperdash.com/address/${f.address}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}
+                                title="View on Hyperdash"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <ExternalLink size={12} />
+                              </a>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', background: '#f4f4f5', border: '1px solid var(--panel-border)', borderRadius: '6px', padding: '0.1rem 0.35rem' }}>
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0.1"
+                              max="10"
+                              style={{ width: '40px', border: 'none', background: 'transparent', textAlign: 'center', fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-main)', padding: 0 }}
+                              value={f.multiplier}
+                              onChange={async (e) => {
+                                const val = Number(e.target.value);
+                                if (val >= 0.1 && val <= 10) {
+                                  // Update local state for immediate response
+                                  setFollowed(prev => prev.map(item => item.address === f.address ? { ...item, multiplier: val } : item));
+                                  // Call API to persist new multiplier
+                                  await followTraderDirect(f.ensName, val);
+                                }
+                              }}
+                            />
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>×</span>
+                          </div>
+                          <button onClick={() => toggleTraderTrades(f.address)} className="btn-ghost" style={{ padding: '0.25rem 0.4rem', fontSize: '0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.1rem', height: 'auto', border: '1px solid var(--panel-border)', cursor: 'pointer' }} title="Toggle recent trades">
+                            {expandedTrader === f.address ? 'Hide Fills' : 'Show Fills'}
+                          </button>
+                          <button onClick={() => handleUnfollow(f.address)} className="btn-danger-icon" title="Unfollow" style={{ marginLeft: '0.25rem' }}>
+                            <Trash2 size={14} />
+                          </button>
                         </div>
-                        <button onClick={() => handleUnfollow(f.address)} className="btn-danger-icon" title="Unfollow">
-                          <Trash2 size={14} />
-                        </button>
+
+                        {/* Collapsible Recent Trades activity */}
+                        {expandedTrader === f.address && (
+                          <div style={{ marginLeft: '40px', padding: '0.5rem 0.75rem', background: '#fafafa', border: '1px solid var(--panel-border)', borderRadius: '6px' }}>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.35rem', letterSpacing: '0.02em' }}>Hyperliquid Activity</div>
+                            {loadingTraderTrades === f.address ? (
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <div className="spinner" style={{ width: '10px', height: '10px', borderWidth: '1.5px', borderTopColor: 'var(--accent)' }}></div>
+                                Loading live fills...
+                              </div>
+                            ) : traderTrades.length === 0 ? (
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>No recent fills found on Hyperliquid.</div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                {traderTrades.map((t: any, idx: number) => (
+                                  <div key={idx} style={{ fontSize: '0.72rem', display: 'flex', justifyContent: 'space-between', color: 'var(--text-main)', alignItems: 'center' }}>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                      <span style={{ fontSize: '0.62rem', fontWeight: 800, padding: '0.1rem 0.3rem', borderRadius: '4px', background: t.side === 'BUY' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: t.side === 'BUY' ? 'var(--success)' : 'var(--danger)' }}>
+                                        {t.side}
+                                      </span>
+                                      <strong>{t.sz}</strong> {t.coin}
+                                    </span>
+                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: '#6b7280' }}>
+                                      ${Number(t.px) < 1 ? Number(t.px).toFixed(4) : Number(t.px).toLocaleString()}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -730,7 +725,7 @@ export default function App() {
                                   />
                                   <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>{trader.ensName}</span>
                                   <a
-                                    href={`https://hyperdash.com/user/${trader.address}`}
+                                    href={`https://hyperdash.com/address/${trader.address}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', marginLeft: '0.25rem' }}
@@ -781,7 +776,7 @@ export default function App() {
                       {loadingWallet && !copyWallet ? <span style={{ color: '#6b7280' }}>Deploying wallet...</span> : (copyWallet ? shortenAddress(copyWallet.address) : '—')}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginTop: '0.25rem' }}>
-                      {copyWallet?.walletId?.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}
+                      Privy Server Wallet
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
@@ -824,11 +819,12 @@ export default function App() {
                     </div>
                   </div>
                   <button
-                    onClick={() => setShowWorldIdModal(true)}
+                    onClick={triggerVerification}
+                    disabled={fetchingRpContext}
                     className="btn-sm"
                     style={{ background: verifiedHumanId ? 'rgba(5,150,105,0.1)' : 'rgba(217,119,6,0.1)', borderColor: verifiedHumanId ? 'rgba(5,150,105,0.3)' : 'rgba(217,119,6,0.3)', color: verifiedHumanId ? 'var(--success)' : 'var(--warning)' }}
                   >
-                    {verifiedHumanId ? 'Refill' : 'Verify'}
+                    {fetchingRpContext ? '...' : (verifiedHumanId ? 'Refill' : 'Verify')}
                   </button>
                 </div>
 
@@ -913,12 +909,79 @@ export default function App() {
                   </button>
 
                   {simSuccessHash && (
-                    <div className="success-banner">
-                      <Check size={14} />
+                    <div className="success-banner" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <Check size={14} style={{ color: 'var(--success)' }} />
                       <div>
-                        <div style={{ fontWeight: 700 }}>Copy triggered!</div>
-                        <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>Check the trades list below for the Base Sepolia tx.</div>
+                        <div style={{ fontWeight: 700 }}>Simulated trade broadcasted!</div>
+                        <div style={{ fontSize: '0.72rem', opacity: 0.8, fontFamily: 'var(--font-mono)' }}>
+                          Tx: {shortenAddress(simSuccessHash)}
+                        </div>
                       </div>
+                    </div>
+                  )}
+
+                  {simError && (
+                    <div className="error-banner" style={{ background: '#fef2f2', border: '1px solid #fee2e2', color: '#b91c1c', padding: '0.75rem', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <span style={{ fontSize: '1rem' }}>❌</span>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>Simulation failed</div>
+                        <div style={{ fontSize: '0.75rem', opacity: 0.9 }}>{simError}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {simResults && (
+                    <div style={{ marginTop: '0.75rem', border: '1px solid var(--panel-border)', borderRadius: '8px', background: '#fafafa', padding: '0.75rem' }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.03em' }}>Copy Execution Logs</div>
+                      {simResults.length === 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: '#6b7280', fontStyle: 'italic' }}>
+                          No active followers found for this trader.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          {simResults.map((res: any, idx: number) => {
+                            const shortenedFollower = res.followerId.startsWith('did:privy:')
+                              ? `did:${res.followerId.split(':').slice(-1)[0].substring(0, 8)}...`
+                              : res.followerId.substring(0, 12) + '...';
+                            return (
+                              <div key={idx} style={{ fontSize: '0.76rem', display: 'flex', alignItems: 'flex-start', gap: '0.35rem', lineHeight: 1.4 }}>
+                                {res.status === 'success' ? (
+                                  <>
+                                    <span style={{ color: '#10b981' }}>✅</span>
+                                    <div style={{ flex: 1 }}>
+                                      <strong>{shortenedFollower}</strong>: Success! Copy Tx:{' '}
+                                      <a
+                                        href={`https://sepolia.basescan.org/tx/${res.copyTxHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}
+                                      >
+                                        {shortenAddress(res.copyTxHash)}
+                                      </a>
+                                    </div>
+                                  </>
+                                ) : res.status === 'gated' ? (
+                                  <>
+                                    <span style={{ color: '#f59e0b' }}>⚠️</span>
+                                    <div style={{ flex: 1 }}>
+                                      <strong>{shortenedFollower}</strong>: <span style={{ color: '#d97706', fontWeight: 500 }}>Gated (402)</span>
+                                      <div style={{ fontSize: '0.7rem', color: '#6b7280' }}>{res.message}</div>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span style={{ color: '#ef4444' }}>❌</span>
+                                    <div style={{ flex: 1 }}>
+                                      <strong>{shortenedFollower}</strong>: <span style={{ color: '#dc2626', fontWeight: 500 }}>Failed</span>
+                                      <div style={{ fontSize: '0.7rem', color: '#ef4444' }}>{res.message}</div>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </form>
@@ -946,29 +1009,34 @@ export default function App() {
                       </thead>
                       <tbody>
                         {trades.slice(0, 10).map((trade) => {
-                          const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ensName || shortenAddress(trade.trader_address);
+                          const traderAddr = trade.traderAddress || "";
+                          const traderName = traders.find(t => t.address === traderAddr.toLowerCase())?.ensName || shortenAddress(traderAddr);
                           return (
                             <tr key={trade.id} style={{ borderBottom: '1px solid #f4f4f5' }}>
                               <td style={{ paddingTop: '0.75rem', paddingBottom: '0.75rem', fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>
-                                <a href={`https://hyperdash.xyz/profile/${trade.trader_address}`} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>
+                                <a href={`https://hyperdash.com/address/${traderAddr}`} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>
                                   {traderName}
                                 </a>
                               </td>
                               <td style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
-                                <span style={{ color: 'var(--text-main)' }}>{trade.amount_in} ETH</span>
+                                <span style={{ color: 'var(--text-main)' }}>{trade.amountIn} ETH</span>
                                 <span style={{ color: '#6b7280', margin: '0 0.3rem' }}>→</span>
                                 <span style={{ color: 'var(--success)' }}>USDC</span>
                               </td>
                               <td>
-                                <a
-                                  href={`https://sepolia.basescan.org/tx/${trade.copy_tx_hash}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  style={{ fontSize: '0.78rem', color: 'var(--accent)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}
-                                >
-                                  {shortenAddress(trade.copy_tx_hash)}
-                                  <ExternalLink size={11} />
-                                </a>
+                                {trade.copyTxHash ? (
+                                  <a
+                                    href={`https://sepolia.basescan.org/tx/${trade.copyTxHash}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ fontSize: '0.78rem', color: 'var(--accent)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}
+                                  >
+                                    {shortenAddress(trade.copyTxHash)}
+                                    <ExternalLink size={11} />
+                                  </a>
+                                ) : (
+                                  <span style={{ fontSize: '0.78rem', color: '#6b7280', fontStyle: 'italic' }}>Pending / Failed</span>
+                                )}
                               </td>
                               <td style={{ fontSize: '0.75rem', color: '#6b7280', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
                                 {new Date(trade.timestamp).toLocaleTimeString()}
@@ -998,50 +1066,24 @@ export default function App() {
           </div>
         )}
 
+        {/* Real World ID Verifier Widget */}
+        {activeRpContext && (
+          <IDKitRequestWidget
+            open={isVerifierOpen}
+            onOpenChange={setIsVerifierOpen}
+            app_id={(import.meta.env.VITE_WORLD_APP_ID || "app_f12b89cfd3bad7bfae952ddc2aa05a2e") as `app_${string}`}
+            action={import.meta.env.VITE_WORLD_ACTION || "verify"}
+            allow_legacy_proofs={true}
+            rp_context={activeRpContext}
+            preset={deviceLegacy()}
+            handleVerify={handleVerifyRealWorldId}
+            onSuccess={handleVerifySuccess}
+          />
+        )}
+
       </main>
 
-      {/* World ID Modal */}
-      {showWorldIdModal && (
-        <div className="modal-overlay" onClick={() => !verifyingWorldId && setShowWorldIdModal(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-icon-wrap" style={{ background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.25)' }}>
-              <Shield size={32} style={{ color: 'var(--accent)' }} />
-            </div>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 0.4rem' }}>World ID Verification</h2>
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
-              Prove your humanity with World ID. This resets your free trial copy-trades and confirms you're a real person, not a Sybil bot.
-            </p>
 
-            {/* Mock QR Code */}
-            <div className="qr-scanner-box">
-              {verifyingWorldId ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
-                  <div className="spinner" style={{ borderTopColor: 'var(--accent)' }}></div>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Verifying with World App...</span>
-                </div>
-              ) : (
-                <>
-                  <div className="mock-qr">
-                    {Array.from({ length: 25 }).map((_, i) => (
-                      <div key={i} style={{ background: (i % 3 === 0 || i % 4 === 1 || i < 5 || i > 20 || i % 5 === 0 || i % 5 === 4) ? 'var(--primary)' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
-                    ))}
-                  </div>
-                  <span style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>Scan with World App</span>
-                </>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '1.25rem' }}>
-              <button onClick={() => setShowWorldIdModal(false)} className="btn-ghost" disabled={verifyingWorldId} style={{ flex: 1, justifyContent: 'center' }}>
-                Cancel
-              </button>
-              <button onClick={handleVerifyWorldId} className="btn-worldcoin" disabled={verifyingWorldId} style={{ flex: 1, justifyContent: 'center' }}>
-                {verifyingWorldId ? 'Verifying...' : 'Verify'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* WLD Purchase Modal */}
       {showPurchaseModal && (
@@ -1105,3 +1147,4 @@ export default function App() {
     </>
   );
 }
+

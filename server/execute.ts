@@ -37,8 +37,7 @@ export async function executeCopyOnBaseSepolia(
     amountOut: string;
   }
 ): Promise<string> {
-  const isLocal = wallet.id.startsWith("local_");
-  console.log(`Executing copy-trade marker tx on Base Sepolia from wallet ${wallet.address} (${isLocal ? "Local" : "Privy"})...`);
+  console.log(`Executing copy-trade marker tx on Base Sepolia from wallet ${wallet.address}...`);
 
   // Encode trade context as calldata so the tx is self-documenting on-chain:
   // "VOUCH_COPY:<traderAddr>:<txHash>:<amountIn>"
@@ -54,20 +53,7 @@ export async function executeCopyOnBaseSepolia(
   let txHash: string;
 
   try {
-    if (isLocal && wallet.privateKey) {
-      const account = privateKeyToAccount(wallet.privateKey as `0x${string}`);
-      const walletClient = createWalletClient({
-        account,
-        chain: baseSepolia,
-        transport: http(baseSepoliaRpc)
-      });
-      txHash = await walletClient.sendTransaction({
-        to: wallet.address as Address,
-        value: dustValue,
-        data: calldata,
-        chain: baseSepolia
-      });
-    } else if (privy) {
+    if (privy) {
       const result = await privy.wallets().ethereum().sendTransaction(wallet.id, {
         caip2: "eip155:84532", // Base Sepolia
         params: {
@@ -80,15 +66,13 @@ export async function executeCopyOnBaseSepolia(
       });
       txHash = result.hash;
     } else {
-      throw new Error("No signer available: Privy not configured and no local private key.");
+      throw new Error("No signer available: Privy not configured.");
     }
 
     console.log(`Copy-trade marker tx submitted: ${txHash}`);
   } catch (err: any) {
-    // If even the dust send fails (e.g. zero balance), generate a deterministic mock hash
-    // so the demo can still show a record. Log clearly so it's not mistaken for a real tx.
-    console.warn(`Marker tx failed (likely zero balance): ${err.message}. Using mock hash for demo.`);
-    txHash = "0xmock_" + Buffer.from(`${swap.trader}:${swap.txHash}`).toString("hex").substring(0, 60);
+    console.error(`Marker tx failed: ${err.message}`);
+    throw err;
   }
 
   // Record the trade in SQLite

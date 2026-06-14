@@ -11,16 +11,9 @@ dotenv.config();
 // Keep track of processed transaction hashes to prevent duplicate copy trades
 const processedTxHashes = new Set<string>();
 
-// Dynamic Agent Wallet generation if not provided in .env
-let agentPrivateKey = process.env.AGENT_PRIVATE_KEY;
-if (!agentPrivateKey || agentPrivateKey.startsWith("mock_")) {
-  console.log("--------------------------------------------------------------------------------");
-  console.log("AGENT_PRIVATE_KEY not set in .env. Generating a dynamic agent wallet for the demo...");
-  agentPrivateKey = generatePrivateKey();
-  const account = privateKeyToAccount(agentPrivateKey as `0x${string}`);
-  console.log(`\x1b[33m%s\x1b[0m`, `=== ACTION REQUIRED: To enable real World ID free copy-trades, register this wallet in AgentBook:`);
-  console.log(`\x1b[36m%s\x1b[0m`, `   bunx @worldcoin/agentkit-cli register ${account.address}`);
-  console.log("--------------------------------------------------------------------------------");
+const agentPrivateKey = process.env.AGENT_PRIVATE_KEY;
+if (!agentPrivateKey) {
+  throw new Error("AGENT_PRIVATE_KEY environment variable is required in production.");
 }
 
 const agentAccount = privateKeyToAccount(agentPrivateKey as `0x${string}`);
@@ -46,6 +39,7 @@ export interface DetectedSwap {
   amountIn: string;
   amountOut: string;
   timestamp: number;
+  isSimulation?: boolean;
 }
 
 // Background poll loop
@@ -133,37 +127,23 @@ async function pollTraderSwaps(traderAddress: string) {
   }
 }
 
-// Trigger simulated/dev swaps
-export async function simulateTraderSwap(
-  traderAddress: string,
-  tokenIn: string,
-  tokenOut: string,
-  amountIn: string,
-  amountOut: string
-) {
-  const txHash = "0xsimulated_" + Math.random().toString(36).substring(2, 15);
-  const swap: DetectedSwap = {
-    trader: traderAddress.toLowerCase(),
-    txHash,
-    tokenIn,
-    tokenOut,
-    amountIn,
-    amountOut,
-    timestamp: Date.now()
-  };
 
-  console.log(`Simulating swap: ${amountIn} (${tokenIn}) -> ${amountOut} (${tokenOut}) by ${traderAddress}`);
-  await triggerCopyTrade(swap);
-  return txHash;
+
+export interface CopyResult {
+  followerId: string;
+  status: "success" | "gated" | "failed";
+  message?: string;
+  copyTxHash?: string;
 }
 
 // Replicate the swap across all followers by hitting the gated `/api/copy` endpoint
-async function triggerCopyTrade(swap: DetectedSwap) {
+async function triggerCopyTrade(swap: DetectedSwap): Promise<CopyResult[]> {
   const followers = await getFollowersOfTrader(swap.trader);
-  if (followers.length === 0) return;
+  if (followers.length === 0) return [];
 
   const serverPort = process.env.PORT || "5001";
   const copyUrl = `http://localhost:${serverPort}/api/copy`;
+  const results: CopyResult[] = [];
 
   for (const follower of followers) {
     // Scale amount according to the follower's multiplier
@@ -186,22 +166,78 @@ async function triggerCopyTrade(swap: DetectedSwap) {
             tokenIn: swap.tokenIn,
             tokenOut: swap.tokenOut,
             amountIn: scaledAmount,
-            amountOut: swap.amountOut
+            amountOut: swap.amountOut,
+            isSimulation: swap.isSimulation
           }
         })
       });
 
       if (res.status === 402) {
+        const body = await res.json().catch(() => ({}));
         console.log(`\x1b[31m%s\x1b[0m`, `Copy trade GATED for user ${follower.id} (402 Payment Required: Free uses exhausted)`);
+        results.push({
+          followerId: follower.id,
+          status: "gated",
+          message: body.error || "Free uses exhausted"
+        });
+      } else if (res.status === 403) {
+        const body = await res.json().catch(() => ({}));
+        console.log(`\x1b[31m%s\x1b[0m`, `Copy trade FAILED for user ${follower.id} (403 Forbidden: Agent not registered)`);
+        results.push({
+          followerId: follower.id,
+          status: "failed",
+          message: body.error || "Agent wallet not registered in AgentBook"
+        });
       } else if (!res.ok) {
         const body = await res.text();
         console.error(`Copy trade failed with status ${res.status}:`, body);
+        results.push({
+          followerId: follower.id,
+          status: "failed",
+          message: body || `HTTP error ${res.status}`
+        });
       } else {
         const result = await res.json() as any;
         console.log(`\x1b[32m%s\x1b[0m`, `Copy trade successful for user ${follower.id}. Copy TxHash: ${result.copyTxHash}`);
+        results.push({
+          followerId: follower.id,
+          status: "success",
+          copyTxHash: result.copyTxHash
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Failed to execute copy trade for user ${follower.id}:`, err);
+      results.push({
+        followerId: follower.id,
+        status: "failed",
+        message: err.message || "Unknown error"
+      });
     }
   }
+  return results;
+}
+
+// Trigger simulated/dev swaps
+export async function simulateTraderSwap(
+  traderAddress: string,
+  tokenIn: string,
+  tokenOut: string,
+  amountIn: string,
+  amountOut: string
+): Promise<{ txHash: string; results: CopyResult[] }> {
+  const txHash = "0xsimulated_" + Math.random().toString(36).substring(2, 15);
+  const swap: DetectedSwap = {
+    trader: traderAddress.toLowerCase(),
+    txHash,
+    tokenIn,
+    tokenOut,
+    amountIn,
+    amountOut,
+    timestamp: Date.now(),
+    isSimulation: true
+  };
+
+  console.log(`Simulating swap: ${amountIn} (${tokenIn}) -> ${amountOut} (${tokenOut}) by ${traderAddress}`);
+  const results = await triggerCopyTrade(swap);
+  return { txHash, results };
 }
