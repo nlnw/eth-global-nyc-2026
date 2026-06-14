@@ -1,8 +1,8 @@
 import { createPublicClient, http } from "viem";
 import { mainnet } from "viem/chains";
 
-// Public Ethereum mainnet RPC — no API key needed for ENS resolution
-const mainnetRpc = "https://cloudflare-eth.com";
+// Public Ethereum mainnet RPC — highly reliable public node
+const mainnetRpc = "https://ethereum.publicnode.com";
 
 const client = createPublicClient({
   chain: mainnet,
@@ -11,10 +11,16 @@ const client = createPublicClient({
 
 export async function resolveName(name: string): Promise<string | null> {
   try {
-    if (!name.endsWith(".eth")) {
-      name = name + ".eth";
+    const trimmed = name.trim();
+    // If it's already a valid hex address, bypass ENS resolution
+    if (trimmed.startsWith("0x") && trimmed.length === 42) {
+      return trimmed;
     }
-    const address = await client.getEnsAddress({ name });
+    let ensName = trimmed;
+    if (!ensName.endsWith(".eth")) {
+      ensName = ensName + ".eth";
+    }
+    const address = await client.getEnsAddress({ name: ensName });
     return address;
   } catch (err) {
     console.error("ENS resolveName error:", err);
