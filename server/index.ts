@@ -8,9 +8,8 @@ import { getDb, addFollow, removeFollow, getFollowedTraders, getTraders, addTrad
 import { resolveName, reverse } from "./ens.js";
 import { getOrCreateWallet } from "./privy.js";
 import { executeCopyOnBaseSepolia, publicClient } from "./execute.js";
-import { verifySignature, getHumanId, tryIncrementHumanUsage, getHumanUsageCount, resetHumanUsage, purchaseExtraTrades } from "./agentkit.js";
+import { verifySignature, getHumanId, tryIncrementHumanUsage, getHumanUsageCount, resetHumanUsage, purchaseExtraTrades, verifyWorldIdProof, generateRpSignature } from "./agentkit.js";
 import { startDetectionLoop, simulateTraderSwap } from "./detector.js";
-import { signRequest } from "@worldcoin/idkit-server";
 
 dotenv.config();
 
@@ -345,42 +344,9 @@ app.post("/api/verify-human-real", async (req, res) => {
   const { userId } = req.body;
   const { userId: _, ...idkitResult } = req.body;
 
-  const appId = process.env.WORLD_APP_ID;
-  const rpId = process.env.WORLD_RP_ID;
-
-  let verifyUrl = "";
-  if (rpId) {
-    verifyUrl = `https://developer.world.org/api/v4/verify/${rpId}`;
-  } else if (appId) {
-    verifyUrl = `https://developer.worldcoin.org/api/v2/verify/${appId}`;
-  } else {
-    return res.status(500).json({ error: "WORLD_RP_ID or WORLD_APP_ID is not configured on the server." });
-  }
-
   try {
-    console.log(`[World ID] Verifying proof for user ${userId} via ${verifyUrl}...`);
-    const response = await fetch(verifyUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(idkitResult)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[World ID] Developer Portal verification failed:`, errorText);
-      return res.status(400).json({ error: `World ID verification failed: ${errorText}` });
-    }
-
-    // Extract nullifier from IDKitResult responses
-    const nullifierHash = idkitResult.responses?.[0]?.nullifier;
-    if (!nullifierHash) {
-      return res.status(400).json({ error: "No nullifier hash found in IDKit responses." });
-    }
-
-    console.log(`[World ID] Verification successful! Nullifier hash: ${nullifierHash}`);
-
+    const nullifierHash = await verifyWorldIdProof(idkitResult);
+    
     // Reset/Refill the trial copy-trade limits for this verified human ID
     await resetHumanUsage("/api/copy", nullifierHash);
 
@@ -395,30 +361,9 @@ app.post("/api/verify-human-real", async (req, res) => {
 app.post("/api/rp-context", async (req, res) => {
   const { action } = req.body;
 
-  const rpId = process.env.WORLD_RP_ID;
-  const privateKey = process.env.WORLD_PRIVATE_KEY;
-
-  if (!rpId || !privateKey) {
-    return res.status(500).json({ error: "WORLD_RP_ID or WORLD_PRIVATE_KEY is not configured on the server." });
-  }
-
   try {
-    const signingKeyHex = privateKey.startsWith("0x") ? privateKey.substring(2) : privateKey;
-    const rpSignature = signRequest({
-      signingKeyHex,
-      action: action || "verify",
-      ttl: 3600 // 1 hour TTL
-    });
-
-    res.json({
-      rp_context: {
-        rp_id: rpId,
-        nonce: rpSignature.nonce,
-        created_at: rpSignature.createdAt,
-        expires_at: rpSignature.expiresAt,
-        signature: rpSignature.sig
-      }
-    });
+    const rpContext = generateRpSignature(action || "verify");
+    res.json({ rp_context: rpContext });
   } catch (err: any) {
     console.error("Failed to generate RP signature:", err);
     res.status(500).json({ error: `Failed to generate RP context: ${err.message}` });

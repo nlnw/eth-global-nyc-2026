@@ -3,11 +3,73 @@ import { verifyMessage } from "viem";
 import { getDb } from "./db.js";
 import { agentkitUsage } from "./schema.js";
 import { eq, and } from "drizzle-orm";
+import { signRequest } from "@worldcoin/idkit-server";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 export const agentBook = createAgentBookVerifier();
+
+/** Generates World ID Relying Party (RP) signature context for the frontend */
+export function generateRpSignature(action: string = "verify") {
+  const rpId = process.env.WORLD_RP_ID;
+  const privateKey = process.env.WORLD_PRIVATE_KEY;
+
+  if (!rpId || !privateKey) {
+    throw new Error("WORLD_RP_ID or WORLD_PRIVATE_KEY is not configured on the server.");
+  }
+
+  const signingKeyHex = privateKey.startsWith("0x") ? privateKey.substring(2) : privateKey;
+  const rpSignature = signRequest({
+    signingKeyHex,
+    action,
+    ttl: 3600 // 1 hour TTL
+  });
+
+  return {
+    rp_id: rpId,
+    nonce: rpSignature.nonce,
+    created_at: rpSignature.createdAt,
+    expires_at: rpSignature.expiresAt,
+    signature: rpSignature.sig
+  };
+}
+
+/** Verifies a World ID v4 proof against the Developer Portal and returns the nullifier hash */
+export async function verifyWorldIdProof(idkitResult: any): Promise<string> {
+  const appId = process.env.WORLD_APP_ID;
+  const rpId = process.env.WORLD_RP_ID;
+
+  let verifyUrl = "";
+  if (rpId) {
+    verifyUrl = `https://developer.world.org/api/v4/verify/${rpId}`;
+  } else if (appId) {
+    verifyUrl = `https://developer.worldcoin.org/api/v2/verify/${appId}`;
+  } else {
+    throw new Error("WORLD_RP_ID or WORLD_APP_ID is not configured on the server.");
+  }
+
+  console.log(`[World ID] Verifying proof via ${verifyUrl}...`);
+  const response = await fetch(verifyUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(idkitResult)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`World ID verification failed: ${errorText}`);
+  }
+
+  const nullifierHash = idkitResult.responses?.[0]?.nullifier;
+  if (!nullifierHash) {
+    throw new Error("No nullifier hash found in IDKit responses.");
+  }
+
+  return nullifierHash;
+}
 
 /** Verifies the agent wallet address signed the challenge message */
 export async function verifySignature(
