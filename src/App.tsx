@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { usePrivy as useRealPrivy, useDepositAddress as useRealDepositAddress } from '@privy-io/react-auth';
+import { usePrivy as useRealPrivy, useDepositAddress as useRealDepositAddress, useWallets as useRealWallets } from '@privy-io/react-auth';
 
 function usePrivy() {
   const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
@@ -35,6 +35,12 @@ function usePrivy() {
     setAuthenticated(false);
   };
 
+  const sendTransaction = async (tx: any) => {
+    console.log("Mock sendTransaction:", tx);
+    alert(`[Demo Mode] Simulated sending transaction of ${Number(tx.value) / 1e18} ETH to ${tx.to}`);
+    return { hash: "0xmock_tx_hash_" + Math.random().toString(36).substring(2, 15) };
+  };
+
   return {
     ready: true,
     authenticated,
@@ -43,7 +49,8 @@ function usePrivy() {
       wallet: { address: mockAddress }
     } : null,
     login,
-    logout
+    logout,
+    sendTransaction
   };
 }
 
@@ -69,6 +76,39 @@ function useDepositAddress() {
       }
     };
   }
+}
+
+function useWallets() {
+  const isMock = !import.meta.env.VITE_PRIVY_APP_ID || import.meta.env.VITE_PRIVY_APP_ID.includes("cm000000") || import.meta.env.VITE_PRIVY_APP_ID === "YOUR_PRIVY_APP_ID";
+
+  if (!isMock) {
+    try {
+      return useRealWallets();
+    } catch (e) {
+      console.warn("Real useWallets failed to initialize, falling back to mock:", e);
+    }
+  }
+
+  const mockAddress = localStorage.getItem('mock_address') || '0xdb77...';
+  return {
+    wallets: [
+      {
+        address: mockAddress,
+        switchChain: async (chainId: number) => {
+          console.log("Mock switchChain to:", chainId);
+        },
+        getEthereumProvider: async () => {
+          return {
+            request: async (args: any) => {
+              console.log("Mock request:", args);
+              alert(`[Demo Mode] Simulated sending transaction of ${Number(args.params[0].value) / 1e18} ETH from your connected wallet.`);
+              return "0xmock_tx_hash_" + Math.random().toString(36).substring(2, 15);
+            }
+          };
+        }
+      }
+    ]
+  };
 }
 
 import {
@@ -124,8 +164,9 @@ interface CopyWallet {
 }
 
 export default function App() {
-  const { login, logout, authenticated, user, ready } = usePrivy();
+  const { login, logout, authenticated, user, ready, sendTransaction } = usePrivy();
   const { createDepositAddress } = useDepositAddress();
+  const { wallets } = useWallets();
   const userId = user?.id;
 
   // World ID state
@@ -207,6 +248,48 @@ export default function App() {
   };
 
   const [copyWallet, setCopyWallet] = useState<CopyWallet | null>(null);
+  const [sendingEth, setSendingEth] = useState(false);
+
+  const handleSendTestnetEth = async () => {
+    if (!copyWallet) return;
+    const activeWallet = wallets?.[0];
+    if (!activeWallet) {
+      alert("No active wallet found. Please connect your wallet first.");
+      return;
+    }
+    setSendingEth(true);
+    try {
+      try {
+        if (activeWallet.switchChain) {
+          await activeWallet.switchChain(84532);
+        }
+      } catch (switchErr) {
+        console.warn("Could not switch chain automatically:", switchErr);
+      }
+
+      const provider = await activeWallet.getEthereumProvider();
+      const txParams = {
+        from: activeWallet.address,
+        to: copyWallet.address,
+        value: '0x71afd498d0000', // 0.002 ETH in hex
+        chainId: 84532,
+      };
+
+      const txHash = await provider.request({
+        method: 'eth_sendTransaction',
+        params: [txParams],
+      });
+
+      console.log("Transaction result:", txHash);
+      alert("0.002 Sepolia Base ETH sent successfully! Checking for updated balance in a few seconds...");
+      setTimeout(fetchWallet, 5000);
+    } catch (err: any) {
+      console.error("Failed to send transaction:", err);
+      alert(err.message || "Failed to send transaction");
+    } finally {
+      setSendingEth(false);
+    }
+  };
   const [loadingWallet, setLoadingWallet] = useState(false);
   const [traders, setTraders] = useState<Trader[]>([]);
   const [followed, setFollowed] = useState<FollowedTrader[]>([]);
@@ -395,9 +478,9 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#06040a' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-base)' }}>
         <div className="spinner"></div>
-        <div style={{ marginTop: '1.5rem', color: '#9ca3af', fontFamily: 'Outfit', fontWeight: 500 }}>Initializing Vouch Engine...</div>
+        <div style={{ marginTop: '1.5rem', color: 'var(--text-muted)', fontFamily: 'Outfit', fontWeight: 500 }}>Initializing Vouch Engine...</div>
       </div>
     );
   }
@@ -418,7 +501,7 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             {authenticated ? (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', padding: '0.4rem 0.9rem', borderRadius: '8px', background: 'rgba(6, 4, 10, 0.4)', border: '1px solid rgba(255,255,255,0.08)', color: '#9ca3af' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', padding: '0.4rem 0.9rem', borderRadius: '8px', background: '#f4f4f5', border: '1px solid var(--panel-border)', color: 'var(--text-main)' }}>
                   <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }}></div>
                   {user?.wallet?.address ? shortenAddress(user.wallet.address) : 'Connected'}
                 </div>
@@ -454,17 +537,17 @@ export default function App() {
 
             <div className="feature-grid">
               <div className="feature-card">
-                <Search size={20} style={{ color: '#c084fc' }} />
+                <Search size={20} style={{ color: 'var(--accent)' }} />
                 <div className="feature-card-title">Discover</div>
                 <div className="feature-card-desc">Track elite traders by their <code>.eth</code> identity.</div>
               </div>
               <div className="feature-card">
-                <Wallet size={20} style={{ color: '#ec4899' }} />
+                <Wallet size={20} style={{ color: 'var(--success)' }} />
                 <div className="feature-card-title">Fund</div>
                 <div className="feature-card-desc">Universal deposit addresses accept any chain or token.</div>
               </div>
               <div className="feature-card">
-                <Globe size={20} style={{ color: '#38bdf8' }} />
+                <Globe size={20} style={{ color: 'var(--primary)' }} />
                 <div className="feature-card-title">World ID</div>
                 <div className="feature-card-desc">Proof-of-human gates prevent Sybil bot farming.</div>
               </div>
@@ -487,7 +570,7 @@ export default function App() {
               {/* Follow ENS */}
               <div className="glass-panel section-card">
                 <h2 className="section-title">
-                  <Plus size={17} style={{ color: '#c084fc' }} />
+                  <Plus size={17} style={{ color: 'var(--accent)' }} />
                   Follow a Trader
                 </h2>
                 <form onSubmit={handleFollow} className="follow-form">
@@ -523,7 +606,7 @@ export default function App() {
               {/* Followed Traders */}
               <div className="glass-panel section-card">
                 <h2 className="section-title">
-                  <Users size={17} style={{ color: '#c084fc' }} />
+                  <Users size={17} style={{ color: 'var(--accent)' }} />
                   Your Followed Traders
                   <span className="count-badge">{followed.length}</span>
                 </h2>
@@ -536,13 +619,13 @@ export default function App() {
                         <img
                           src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ens_name}`}
                           alt={f.ens_name}
-                          style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}
+                          style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--panel-border)' }}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#e5e7eb', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ens_name}</div>
+                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ens_name}</div>
                           <div style={{ fontSize: '0.75rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>{shortenAddress(f.address)}</div>
                         </div>
-                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#c084fc', fontFamily: 'var(--font-mono)' }}>{f.multiplier}×</span>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{f.multiplier}×</span>
                         <button onClick={() => handleUnfollow(f.address)} className="btn-danger-icon" title="Unfollow">
                           <Trash2 size={14} />
                         </button>
@@ -555,7 +638,7 @@ export default function App() {
               {/* Leaderboard */}
               <div className="glass-panel section-card">
                 <h2 className="section-title">
-                  <Award size={17} style={{ color: '#facc15' }} />
+                  <Award size={17} style={{ color: 'var(--warning)' }} />
                   Global Leaderboard
                 </h2>
                 {traders.length === 0 ? (
@@ -564,7 +647,7 @@ export default function App() {
                   <div style={{ overflowX: 'auto' }}>
                     <table className="leaderboard-table" style={{ width: '100%' }}>
                       <thead>
-                        <tr style={{ textAlign: 'left', fontSize: '0.75rem', color: '#6b7280', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <tr style={{ textAlign: 'left', fontSize: '0.75rem', color: '#6b7280', borderBottom: '1px solid var(--panel-border)' }}>
                           <th style={{ paddingBottom: '0.75rem' }}>Trader</th>
                           <th style={{ paddingBottom: '0.75rem' }}>Swaps</th>
                           <th style={{ paddingBottom: '0.75rem' }}>PnL</th>
@@ -575,7 +658,7 @@ export default function App() {
                         {traders.map((trader) => {
                           const isFollowed = followed.some(f => f.address === trader.address);
                           return (
-                            <tr key={trader.address} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                            <tr key={trader.address} style={{ borderBottom: '1px solid #f4f4f5' }}>
                               <td style={{ paddingTop: '0.85rem', paddingBottom: '0.85rem' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                   <img
@@ -583,11 +666,11 @@ export default function App() {
                                     alt={trader.ens_name}
                                     style={{ width: '22px', height: '22px', borderRadius: '50%' }}
                                   />
-                                  <span style={{ fontWeight: 600, fontSize: '0.85rem', color: '#e5e7eb' }}>{trader.ens_name}</span>
+                                  <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>{trader.ens_name}</span>
                                 </div>
                               </td>
-                              <td style={{ fontSize: '0.85rem', color: '#9ca3af', fontFamily: 'var(--font-mono)' }}>{trader.total_trades}</td>
-                              <td style={{ fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: trader.pnl >= 0 ? '#34d399' : '#f87171' }}>
+                              <td style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{trader.total_trades}</td>
+                              <td style={{ fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: trader.pnl >= 0 ? 'var(--success)' : 'var(--danger)' }}>
                                 {trader.pnl >= 0 ? '+' : ''}{trader.pnl}%
                               </td>
                               <td style={{ textAlign: 'right' }}>
@@ -613,26 +696,26 @@ export default function App() {
               {/* Wallet Card */}
               <div className="glass-panel section-card">
                 <h2 className="section-title">
-                  <Wallet size={17} style={{ color: '#ec4899' }} />
+                  <Wallet size={17} style={{ color: 'var(--accent)' }} />
                   Copy-Trading Wallet
                 </h2>
                 <div className="wallet-row">
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>Address (Base Sepolia)</div>
                     <div
-                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.9rem', color: '#e5e7eb', cursor: 'pointer' }}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.9rem', color: 'var(--text-main)', cursor: 'pointer' }}
                       onClick={() => { if (copyWallet) { navigator.clipboard.writeText(copyWallet.address); } }}
                       title="Click to copy"
                     >
                       {loadingWallet && !copyWallet ? <span style={{ color: '#6b7280' }}>Deploying wallet...</span> : (copyWallet ? shortenAddress(copyWallet.address) : '—')}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#c084fc', marginTop: '0.25rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginTop: '0.25rem' }}>
                       {copyWallet?.walletId?.startsWith('local_') ? 'Local Failsafe Wallet' : 'Privy Server Wallet'}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>Balance</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.1rem', color: '#f3f4f6' }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1.1rem', color: 'var(--text-main)' }}>
                       {copyWallet ? `${Number(copyWallet.balance).toFixed(5)} ETH` : '—'}
                     </div>
                   </div>
@@ -641,27 +724,27 @@ export default function App() {
                   <button onClick={handleFundWallet} className="btn-primary" style={{ flex: 1, justifyContent: 'center', fontSize: '0.8rem' }}>
                     Universal Deposit
                   </button>
-                  <a href="https://faucets.chain.link/base-sepolia" target="_blank" rel="noopener noreferrer" className="btn-ghost" style={{ flex: 1, justifyContent: 'center', fontSize: '0.8rem', textDecoration: 'none' }}>
-                    Get Faucet ETH
-                  </a>
+                  <button onClick={handleSendTestnetEth} className="btn-ghost" style={{ flex: 1, justifyContent: 'center', fontSize: '0.8rem' }} disabled={sendingEth}>
+                    {sendingEth ? 'Sending...' : 'Send 0.002 ETH'}
+                  </button>
                 </div>
               </div>
 
               {/* World ID + WLD Hub */}
               <div className="glass-panel section-card worldid-card">
                 <h2 className="section-title" style={{ marginBottom: '1.25rem' }}>
-                  <Globe size={17} style={{ color: '#38bdf8' }} />
+                  <Globe size={17} style={{ color: 'var(--accent)' }} />
                   World ID & WLD Hub
                 </h2>
 
                 {/* Verification Status */}
                 <div className="worldid-status-row">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <div style={{ width: '36px', height: '36px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: verifiedHumanId ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.12)', border: `1px solid ${verifiedHumanId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}` }}>
-                      {verifiedHumanId ? <Check size={18} style={{ color: '#34d399' }} /> : <Shield size={18} style={{ color: '#fbbf24' }} />}
+                    <div style={{ width: '36px', height: '36px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: verifiedHumanId ? 'rgba(5,150,105,0.15)' : 'rgba(217,119,6,0.12)', border: `1px solid ${verifiedHumanId ? 'rgba(5,150,105,0.3)' : 'rgba(217,119,6,0.3)'}` }}>
+                      {verifiedHumanId ? <Check size={18} style={{ color: 'var(--success)' }} /> : <Shield size={18} style={{ color: 'var(--warning)' }} />}
                     </div>
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: verifiedHumanId ? '#34d399' : '#fbbf24' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: verifiedHumanId ? 'var(--success)' : 'var(--warning)' }}>
                         {verifiedHumanId ? 'Verified Human' : 'Not Verified'}
                       </div>
                       <div style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>
@@ -672,7 +755,7 @@ export default function App() {
                   <button
                     onClick={() => setShowWorldIdModal(true)}
                     className="btn-sm"
-                    style={{ background: verifiedHumanId ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)', borderColor: verifiedHumanId ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)', color: verifiedHumanId ? '#34d399' : '#fbbf24' }}
+                    style={{ background: verifiedHumanId ? 'rgba(5,150,105,0.1)' : 'rgba(217,119,6,0.1)', borderColor: verifiedHumanId ? 'rgba(5,150,105,0.3)' : 'rgba(217,119,6,0.3)', color: verifiedHumanId ? 'var(--success)' : 'var(--warning)' }}
                   >
                     {verifiedHumanId ? 'Refill' : 'Verify'}
                   </button>
@@ -684,15 +767,15 @@ export default function App() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'linear-gradient(135deg, #1d4ed8, #0ea5e9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 800, color: 'white' }}>W</div>
-                    <span style={{ fontSize: '0.85rem', color: '#9ca3af' }}>WLD Balance</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>WLD Balance</span>
                   </div>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1rem', color: '#f3f4f6' }}>{wldBalance.toFixed(2)} WLD</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '1rem', color: 'var(--text-main)' }}>{wldBalance.toFixed(2)} WLD</span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                  <div style={{ fontSize: '0.8rem', color: '#9ca3af' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                     Copy-trade capacity
-                    <span style={{ fontFamily: 'var(--font-mono)', color: '#c084fc', marginLeft: '0.5rem', fontWeight: 700 }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)', marginLeft: '0.5rem', fontWeight: 700 }}>
                       {totalCopyLimit} total
                     </span>
                     <span style={{ fontSize: '0.72rem', color: '#6b7280', marginLeft: '0.3rem' }}>
@@ -718,9 +801,9 @@ export default function App() {
               </div>
 
               {/* Simulation Tools */}
-              <div className="glass-panel section-card" style={{ borderColor: 'rgba(126,34,206,0.15)' }}>
+              <div className="glass-panel section-card">
                 <h2 className="section-title">
-                  <Play size={17} style={{ color: '#ec4899' }} />
+                  <Play size={17} style={{ color: 'var(--accent)' }} />
                   Trade Simulator
                   <span style={{ fontSize: '0.7rem', color: '#6b7280', marginLeft: '0.5rem', fontWeight: 400 }}>demo helper</span>
                 </h2>
@@ -773,7 +856,7 @@ export default function App() {
               {/* Copied Trades History */}
               <div className="glass-panel section-card">
                 <h2 className="section-title">
-                  <Activity size={17} style={{ color: '#c084fc' }} />
+                  <Activity size={17} style={{ color: 'var(--accent)' }} />
                   Copied Trades
                   <span className="count-badge">{trades.length}</span>
                 </h2>
@@ -783,7 +866,7 @@ export default function App() {
                   <div style={{ overflowX: 'auto' }}>
                     <table className="leaderboard-table" style={{ width: '100%' }}>
                       <thead>
-                        <tr style={{ textAlign: 'left', fontSize: '0.72rem', color: '#6b7280', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <tr style={{ textAlign: 'left', fontSize: '0.72rem', color: '#6b7280', borderBottom: '1px solid var(--panel-border)' }}>
                           <th style={{ paddingBottom: '0.6rem' }}>Trader</th>
                           <th style={{ paddingBottom: '0.6rem' }}>Trade</th>
                           <th style={{ paddingBottom: '0.6rem' }}>Base Sepolia Tx</th>
@@ -794,19 +877,19 @@ export default function App() {
                         {trades.slice(0, 10).map((trade) => {
                           const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ens_name || shortenAddress(trade.trader_address);
                           return (
-                            <tr key={trade.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                              <td style={{ paddingTop: '0.75rem', paddingBottom: '0.75rem', fontWeight: 600, fontSize: '0.82rem', color: '#e5e7eb' }}>{traderName}</td>
+                            <tr key={trade.id} style={{ borderBottom: '1px solid #f4f4f5' }}>
+                              <td style={{ paddingTop: '0.75rem', paddingBottom: '0.75rem', fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>{traderName}</td>
                               <td style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
-                                <span style={{ color: '#c084fc' }}>{trade.amount_in} ETH</span>
+                                <span style={{ color: 'var(--text-main)' }}>{trade.amount_in} ETH</span>
                                 <span style={{ color: '#6b7280', margin: '0 0.3rem' }}>→</span>
-                                <span style={{ color: '#34d399' }}>USDC</span>
+                                <span style={{ color: 'var(--success)' }}>USDC</span>
                               </td>
                               <td>
                                 <a
                                   href={`https://sepolia.basescan.org/tx/${trade.copy_tx_hash}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  style={{ fontSize: '0.78rem', color: '#c084fc', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}
+                                  style={{ fontSize: '0.78rem', color: 'var(--accent)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}
                                 >
                                   {shortenAddress(trade.copy_tx_hash)}
                                   <ExternalLink size={11} />
@@ -846,11 +929,11 @@ export default function App() {
       {showWorldIdModal && (
         <div className="modal-overlay" onClick={() => !verifyingWorldId && setShowWorldIdModal(false)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-icon-wrap" style={{ background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.25)' }}>
-              <Shield size={32} style={{ color: '#38bdf8' }} />
+            <div className="modal-icon-wrap" style={{ background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.25)' }}>
+              <Shield size={32} style={{ color: 'var(--accent)' }} />
             </div>
             <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 0.4rem' }}>World ID Verification</h2>
-            <p style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: '1.5rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
               Prove your humanity with World ID. This resets your free trial copy-trades and confirms you're a real person, not a Sybil bot.
             </p>
 
@@ -858,14 +941,14 @@ export default function App() {
             <div className="qr-scanner-box">
               {verifyingWorldId ? (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
-                  <div className="spinner" style={{ borderTopColor: '#38bdf8' }}></div>
-                  <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>Verifying with World App...</span>
+                  <div className="spinner" style={{ borderTopColor: 'var(--accent)' }}></div>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Verifying with World App...</span>
                 </div>
               ) : (
                 <>
                   <div className="mock-qr">
                     {Array.from({ length: 25 }).map((_, i) => (
-                      <div key={i} style={{ background: (i % 3 === 0 || i % 4 === 1 || i < 5 || i > 20 || i % 5 === 0 || i % 5 === 4) ? '#06040a' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
+                      <div key={i} style={{ background: (i % 3 === 0 || i % 4 === 1 || i < 5 || i > 20 || i % 5 === 0 || i % 5 === 4) ? 'var(--primary)' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
                     ))}
                   </div>
                   <span style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>Scan with World App</span>
@@ -889,43 +972,43 @@ export default function App() {
       {showPurchaseModal && (
         <div className="modal-overlay" onClick={() => !purchasingTrades && setShowPurchaseModal(false)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-icon-wrap" style={{ background: 'rgba(29,78,216,0.15)', border: '1px solid rgba(14,165,233,0.3)' }}>
+            <div className="modal-icon-wrap" style={{ background: 'rgba(37,99,235,0.15)', border: '1px solid rgba(37,99,235,0.3)' }}>
               <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'linear-gradient(135deg, #1d4ed8, #0ea5e9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', fontWeight: 800, color: 'white' }}>W</div>
             </div>
             <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 0.4rem' }}>Purchase Copy-Trades</h2>
-            <p style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: '1.25rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
-              Spend <strong style={{ color: '#f3f4f6' }}>1.0 WLD</strong> to unlock <strong style={{ color: '#f3f4f6' }}>10 additional copy-trades</strong> beyond your free trial.
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1.25rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '280px' }}>
+              Spend <strong style={{ color: 'var(--text-main)' }}>1.0 WLD</strong> to unlock <strong style={{ color: 'var(--text-main)' }}>10 additional copy-trades</strong> beyond your free trial.
             </p>
 
             <div className="purchase-summary">
               <div className="purchase-row">
                 <span>Copy-trades purchased</span>
-                <span style={{ fontWeight: 700, color: '#c084fc' }}>+{purchaseAmount}</span>
+                <span style={{ fontWeight: 700, color: 'var(--accent)' }}>+{purchaseAmount}</span>
               </div>
               <div className="purchase-row">
                 <span>Cost</span>
-                <span style={{ fontWeight: 700, color: '#f3f4f6' }}>{wldCostPerPurchase} WLD</span>
+                <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{wldCostPerPurchase} WLD</span>
               </div>
-              <div className="purchase-row" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.6rem', marginTop: '0.25rem' }}>
+              <div className="purchase-row" style={{ borderTop: '1px solid var(--panel-border)', paddingTop: '0.6rem', marginTop: '0.25rem' }}>
                 <span>Remaining balance</span>
-                <span style={{ fontWeight: 700, color: wldBalance - wldCostPerPurchase < 0 ? '#f87171' : '#34d399' }}>
+                <span style={{ fontWeight: 700, color: wldBalance - wldCostPerPurchase < 0 ? 'var(--danger)' : 'var(--success)' }}>
                   {(wldBalance - wldCostPerPurchase).toFixed(2)} WLD
                 </span>
               </div>
             </div>
 
             {/* Purchase QR */}
-            <div className="qr-scanner-box" style={{ borderColor: 'rgba(14,165,233,0.3)' }}>
+            <div className="qr-scanner-box" style={{ borderColor: 'var(--panel-border)' }}>
               {purchasingTrades ? (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
                   <div className="spinner" style={{ borderTopColor: '#0ea5e9' }}></div>
-                  <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>Confirming in World App...</span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Confirming in World App...</span>
                 </div>
               ) : (
                 <>
                   <div className="mock-qr" style={{ borderColor: '#1d4ed8' }}>
                     {Array.from({ length: 25 }).map((_, i) => (
-                      <div key={i} style={{ background: (i % 2 === 0 || i % 5 === 1 || i < 5 || i > 18) ? '#06040a' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
+                      <div key={i} style={{ background: (i % 2 === 0 || i % 5 === 1 || i < 5 || i > 18) ? 'var(--primary)' : 'transparent', borderRadius: '2px', width: '100%', height: '100%' }}></div>
                     ))}
                   </div>
                   <span style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>Confirm payment in World App</span>

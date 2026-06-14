@@ -13,8 +13,8 @@ createRoot(document.getElementById('root')!).render(
       config={{
         loginMethods: ['email', 'wallet'],
         appearance: {
-          theme: 'dark',
-          accentColor: '#a78bfa',
+          theme: 'light',
+          accentColor: '#2563eb',
           showWalletLoginFirst: true
         },
         embeddedWallets: {
