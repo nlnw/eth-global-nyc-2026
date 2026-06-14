@@ -188,9 +188,9 @@ export async function saveUser(userId: string, walletId: string, walletAddress: 
 export async function getFollowedTraders(userId: string) {
   return db.select({
     address: traders.address,
-    ens_name: traders.ensName,
+    ensName: traders.ensName,
     avatar: traders.avatar,
-    total_trades: traders.totalTrades,
+    totalTrades: traders.totalTrades,
     pnl: traders.pnl,
     winrate: traders.winrate,
     multiplier: follows.multiplier,

@@ -132,9 +132,9 @@ import {
 
 interface Trader {
   address: string;
-  ens_name: string;
+  ensName: string;
   avatar: string | null;
-  total_trades: number;
+  totalTrades: number;
   pnl: number;
   winrate: number;
 }
@@ -642,13 +642,24 @@ export default function App() {
                     {followed.map((f) => (
                       <div key={f.address} className="trader-row">
                         <img
-                          src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ens_name}`}
-                          alt={f.ens_name}
+                          src={f.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${f.ensName}`}
+                          alt={f.ensName}
                           style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--panel-border)' }}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ens_name}</div>
-                          <div style={{ fontSize: '0.75rem', color: '#6b7280', fontFamily: 'var(--font-mono)' }}>{shortenAddress(f.address)}</div>
+                          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.ensName}</div>
+                          <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ color: '#6b7280', fontFamily: 'var(--font-mono)' }}>{shortenAddress(f.address)}</span>
+                            <a
+                              href={`https://hyperdash.com/user/${f.address}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}
+                              title="View on Hyperdash"
+                            >
+                              <ExternalLink size={12} />
+                            </a>
+                          </div>
                         </div>
                         <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{f.multiplier}×</span>
                         <button onClick={() => handleUnfollow(f.address)} className="btn-danger-icon" title="Unfollow">
@@ -687,14 +698,23 @@ export default function App() {
                               <td style={{ paddingTop: '0.85rem', paddingBottom: '0.85rem' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                   <img
-                                    src={trader.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${trader.ens_name}`}
-                                    alt={trader.ens_name}
+                                    src={trader.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${trader.ensName}`}
+                                    alt={trader.ensName}
                                     style={{ width: '22px', height: '22px', borderRadius: '50%' }}
                                   />
-                                  <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>{trader.ens_name}</span>
+                                  <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>{trader.ensName}</span>
+                                  <a
+                                    href={`https://hyperdash.com/user/${trader.address}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', marginLeft: '0.25rem' }}
+                                    title="View on Hyperdash"
+                                  >
+                                    <ExternalLink size={12} />
+                                  </a>
                                 </div>
                               </td>
-                              <td style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{trader.total_trades}</td>
+                              <td style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{trader.totalTrades}</td>
                               <td style={{ fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: trader.pnl >= 0 ? 'var(--success)' : 'var(--danger)' }}>
                                 {trader.pnl >= 0 ? '+' : ''}{trader.pnl}%
                               </td>
@@ -702,7 +722,7 @@ export default function App() {
                                 {isFollowed ? (
                                   <span className="badge-following">Following</span>
                                 ) : (
-                                  <button onClick={() => setEnsInput(trader.ens_name)} className="btn-sm">Follow</button>
+                                  <button onClick={() => setEnsInput(trader.ensName)} className="btn-sm">Follow</button>
                                 )}
                               </td>
                             </tr>
@@ -843,7 +863,7 @@ export default function App() {
                   >
                     <option value="">— Select a followed trader —</option>
                     {followed.map(f => (
-                      <option key={f.address} value={f.address}>{f.ens_name} ({shortenAddress(f.address)})</option>
+                      <option key={f.address} value={f.address}>{f.ensName} ({shortenAddress(f.address)})</option>
                     ))}
                   </select>
 
@@ -900,10 +920,14 @@ export default function App() {
                       </thead>
                       <tbody>
                         {trades.slice(0, 10).map((trade) => {
-                          const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ens_name || shortenAddress(trade.trader_address);
+                          const traderName = traders.find(t => t.address === trade.trader_address.toLowerCase())?.ensName || shortenAddress(trade.trader_address);
                           return (
                             <tr key={trade.id} style={{ borderBottom: '1px solid #f4f4f5' }}>
-                              <td style={{ paddingTop: '0.75rem', paddingBottom: '0.75rem', fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>{traderName}</td>
+                              <td style={{ paddingTop: '0.75rem', paddingBottom: '0.75rem', fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                                <a href={`https://hyperdash.xyz/profile/${trade.trader_address}`} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>
+                                  {traderName}
+                                </a>
+                              </td>
                               <td style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>
                                 <span style={{ color: 'var(--text-main)' }}>{trade.amount_in} ETH</span>
                                 <span style={{ color: '#6b7280', margin: '0 0.3rem' }}>→</span>
