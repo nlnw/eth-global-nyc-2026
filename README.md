@@ -2,7 +2,7 @@
 
 Vouch is an autonomous on-chain copy-trading service: follow traders by **ENS name**, fund a secure **Privy server-side wallet**, and a **proof-of-human-gated agent (World AgentKit)** mirrors their trades on **Base Sepolia** automatically.
 
-* **3 free copy-trades** unlocked via World ID verification (prevents Sybil farming).
+* **3 free copy-trades** unlocked via real World ID verification (prevents Sybil farming).
 * **Purchase additional trades** by spending simulated WLD tokens through a Worldcoin payment flow.
 
 ---
@@ -19,7 +19,8 @@ Vouch is an autonomous on-chain copy-trading service: follow traders by **ENS na
                        │   POST /api/follow          (ENS resolve)     │
                        │   POST /api/get-wallet      (Privy wallet)    │
                        │   POST /api/copy            (AgentKit gated)  │
-                       │   POST /api/verify-human    (World ID reset)  │
+                       │   POST /api/rp-context      (RP SIWE signature)│
+                       │   POST /api/verify-human-real (World ID v4 verify)│
                        │   POST /api/purchase-trades (WLD purchase)    │
                        │                                               │
                        │  Background Detection Loop (every 15s):       │
@@ -46,9 +47,11 @@ ENS is the identity layer. Users follow traders by `.eth` name — resolved to a
 ### 🩻 World ID & AgentKit
 Guards copy-trade execution from bot spam:
 - **AgentBook:** The backend agent signs a CAIP-122/SIWE challenge. The server verifies the signature and looks up the agent wallet on World Chain's **AgentBook** registry to resolve an anonymous `humanId`.
-- **Replay Protection:** Each challenge nonce is single-use and expires after 5 minutes.
+- **Relying Party (RP) Signatures:** To prevent impersonation attacks, the backend uses `signRequest` from `@worldcoin/idkit-server` and `WORLD_PRIVATE_KEY` to sign challenges and return a secure `rp_context` via `/api/rp-context`.
+- **Real Verification Widget:** The frontend loads `@worldcoin/idkit`'s `IDKitRequestWidget` using the generated `rp_context`. The user scans the QR code using their World App (or the World ID Developer Portal Simulator) to generate a cryptographic proof.
+- **Backend Verification:** `/api/verify-human-real` forwards the IDKit proof to World ID's official v4 verification endpoint: `POST https://developer.world.org/api/v4/verify/${WORLD_RP_ID}`. If successful, the user's trial limit is refilled.
 - **Trial Limits:** Usage is tracked per `humanId` (not per wallet). Each verified human gets **3 free trades**. Additional trades can be purchased with WLD.
-- **WLD Purchases:** Users spend WLD to purchase packs of 10 extra copy-trades. The WLD balance is simulated on the frontend for the demo; the purchased count is persisted in SQLite.
+- **WLD Purchases:** Users spend WLD to purchase packs of 10 extra copy-trades. The WLD balance is simulated on the frontend for the demo; the purchased count is persisted in Postgres.
 
 ### 🔑 Privy
 - **Server Wallets:** On login, the backend creates a Privy server-controlled wallet. The copy-trading loop can sign and submit transactions on the user's behalf, even when they are offline.
@@ -66,7 +69,7 @@ bun install
 ### 2. Environment Setup
 ```bash
 cp .env.example .env
-# Fill in PRIVY_APP_ID, PRIVY_APP_SECRET, VITE_PRIVY_APP_ID
+# Fill in PRIVY_APP_ID, PRIVY_APP_SECRET, VITE_PRIVY_APP_ID, and World ID variables
 ```
 
 No RPC keys are required — the app uses public endpoints.
@@ -87,6 +90,12 @@ Runs Express (port `5001`) and the Vite dev server concurrently.
 | `PRIVY_APP_SECRET` | Privy App Secret (backend) |
 | `VITE_PRIVY_APP_ID` | Same App ID, used at Vite build time |
 | `AGENT_PRIVATE_KEY` | Private key for the backend copy-trading agent wallet |
+| `WORLD_APP_ID` | World ID App ID (e.g. `app_f12b89cfd3bad7bfae952ddc2aa05a2e`) |
+| `VITE_WORLD_APP_ID` | Same App ID, used at Vite build time |
+| `WORLD_ACTION` | World ID Action Name (e.g. `verify`) |
+| `VITE_WORLD_ACTION` | Same Action Name, used at Vite build time |
+| `WORLD_RP_ID` | World ID Relying Party ID (e.g. `rp_0756d9d0a7365c3d`) |
+| `WORLD_PRIVATE_KEY` | World ID Relying Party Private Key (for signing rp_context) |
 
 ### Heroku
 ```bash
@@ -117,4 +126,3 @@ To register your copy-trading agent:
 3. Scan the QR code with your **Orb-verified World App**.
 
 After registration, every copy-trade resolves to a real `humanId` on World Chain — the trial counter and 402 gating are live and Sybil-resistant.
-
